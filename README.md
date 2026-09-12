@@ -171,7 +171,7 @@ Allocating into a free way avoids a pointless eviction. Breaking ties by lowest
 index rather than arbitrarily keeps victim selection deterministic, which makes
 failures reproducible across seeds.
 *Trade-off:* it biases which ways fill first, so `cg_alloc` covers free-way and
-PLRU-driven victim selection as separate cases to prove both paths run.
+PLRU-driven victim selection as separate cases to prove both paths run
 
 **The bus operation is re-derived every cycle rather than latched at request
 time.**
