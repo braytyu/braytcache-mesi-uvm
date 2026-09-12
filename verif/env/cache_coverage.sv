@@ -41,7 +41,7 @@ class cache_coverage extends uvm_component;
     }
   endgroup
 
-  // Coherent transaction outcomes, including dirty intervention -- a snooper
+  // Coherent transaction outcomes, including dirty intervention, a snooper
   // supplying data instead of memory.
   covergroup cg_bus with function sample (bus_op_e     op,
                                           int unsigned core_id,

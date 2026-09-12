@@ -2,8 +2,8 @@
 
 braytcache is a two-core, set-associative, write-back L1 data cache that
 maintains **MESI coherence** over a snooping interconnect. It is verified by a
-constrained-random **UVM** environment that combines transaction-level data
-checking with coherence-invariant checking, functional coverage, and protocol
+constrained-random **UVM** environment that features transaction-level data
+checking, coherence-invariant checking, functional coverage, and protocol
 assertions.
 
 ---
@@ -25,16 +25,16 @@ run)
 
 ## Project motivation
 
-I wanted to use this project to exercise my RTL design and verification skills that I had developed over the course of my most recent internship. After deliberating on a project to demonstrate these skills, I chose to develop a two core L1 data cache with MESI cache coherence. This is because I believe there would be interesting interactions between independent components, shared state, ownership, data movement, and timing; making this a suitable option.
+I wanted to use this project to exercise my RTL design and verification skills that I had developed over the course of my most recent internship. After deliberating on a project to demonstrate these skills, I chose to develop a two-core L1 data cache with MESI cache coherence. This design offered interesting interactions between independent components, shared state, ownership, data movement, and timing, while remaining plausible to execute. 
 
 The verification methodology I was most interested in exploring was
 **constrained-random verification (CRV)**. Rather than relying solely on
 directed tests, I wanted to build an environment that could generate varied
 traffic, compare results against reference models, collect functional coverage,
-and continuously check protocol rules with assertions.
+and incorporate protocol rule checks with assertions.
 
-A cache-coherence design provides a useful setting for that methodology. Random
-traffic can expose interactions that are difficult to anticipate manually, while
+Random traffic provides a realistic range of interactions that would more closely simulate 
+how the design works in real operation. To make CRV meaningful, we also introduce
 targeted constraints can increase pressure on specific behaviors such as
 ownership transfers, sharing, false sharing, evictions, writebacks, and
 replacement. The scoreboard and coverage model then provide feedback about both
@@ -90,13 +90,13 @@ graph TB
   BUS -->|axil_if<br/>AXI4-Lite| MEM["memory"]
 ```
 
-There are three protocol boundaries and three different protocols:
+There are three protocol boundaries and three different protocols for each:
 
 | Boundary | Protocol | Purpose and rationale |
 |---|---|---|
-| core ↔ L1 | OBI-style `req`/`gnt`/`rvalid` | Matches the request and response behavior of a typical core-to-cache interface while keeping the cache-side agent simple. |
-| L1 ↔ L1 | Simplified ACE-inspired bus | Provides the snoop, ownership, and cache-line data signaling required for MESI coherence; AXI4-Lite cannot carry these transactions. |
-| Interconnect ↔ memory | AXI4-Lite | Uses a standard point-to-point memory protocol for line fills and writebacks, with each cache-line word transferred as a separate single-beat transaction. |
+| core ↔ L1 | OBI-style `req`/`gnt`/`rvalid` | Provides a simple request/accept/response interface for single-word accesses. req and gnt establish the request and acceptance phase, while rvalid indicates completion and returned data, matching the blocking, one-outstanding-request behavior of the L1. |
+| L1 ↔ L1 | Simplified ACE-inspired bus | Provides the transaction semantics required for MESI coherence, including shared and unique reads, ownership upgrades, writebacks, snoop responses, and cache-line data forwarding. The bus also carries IsShared and PassDirty information needed to determine the requester's resulting MESI state and the source of the most recent line data. |
+| Interconnect ↔ memory | AXI4-Lite | Provides a standard memory-side interface using independent read-address/read-data and write-address/write-data/write-response channels. Cache-line fills and writebacks are decomposed into LINE_WORDS single-beat transactions, with AXI4-Lite providing the handshake, response, and backpressure semantics for each transfer. |
 
 Protocol choice and design is justified in [Design decisions](#design-decisions) below.
 
@@ -111,172 +111,127 @@ Note: decisions are marked in repo with a `DECISION:` comment, so
 
 ### Interfaces
 
-#### OBI-style req/gnt/rvalid for core, not AXI.
-Real cores do not talk to their L1 over AXI (real cores such as Ibex and CV32E40P, which are open source cores by lowRISC and OpenHW Group), they present a
-`req`/`gnt` address phase followed by an `rvalid` response phase. Putting AXI here would add five independent channels, IDs and
-burst logic to a boundary that issues one aligned word at a time, which brings driver
-and monitor complexity with no additional coverage. 
+#### Core-Cache Interface: OBI-Style req/gnt/rvalid.
+Open-source cores such as Ibsex (lowRISC) and VC32E40P (OpenHW Group) use a request/grand handshake for the adddress phase, followed by an rvalid response phase. This interface is therefore a closer representation of a conventional core-to-cache boundary while remaining appropriately scoped for this project. Introducing AXI at this interface would add five independent channels, transaction IDs, and burst-handling logic to a boundary that issues a single aligned word per request. This would substantially increase the complexity of the verification agent without providing additional function coverage relevant to the cache itself. 
 *Trade-off:* the core agent is custom, so it is not reusable outside this
 project.
 
-#### The coherence bus is a simplified ACE, not AXI4-Lite.
-AXI4-Lite physically cannot carry coherence. It has no snoop address channel, no
-snoop response channel, no snoop data channel, and no way for a master to
-declare or know of a cache-line state. It is a single-beat, point-to-point
-read/write protocol. 
+#### Coherence Interface: Simplified ACE-Inspired Protocol.
+AXI4-Lite is not suitable as the coherence interface because it provides no
+mechanism for snoop requests, snoop responses, cache-line state, or
+cache-to-cache data transfer. It is a single-beat point-to-point read/write
+protocol and does not define the transaction semantics required for MESI
+coherence.
 
-In the AMBA family there exists **ACE**, ARM's coherency extension to
-AXI, which adds exactly those channels (AC / CR / CD) and whose transaction set
-maps one-to-one onto MESI. Our custom bus borrows ACE's vocabulary: `ReadShared`,
-`ReadUnique`, `CleanUnique`, `WriteBack`, and the `IsShared` / `PassDirty`
-response attributes to make the design legible. 
+Within the AMBA family, ACE (AXI Coherency Extensions) adds dedicated
+coherence channels and transaction semantics for communicating snoop requests,
+responses, and data. This project uses ACE terminology where it
+helps make the coherence operations explicit: ReadShared, ReadUnique,
+CleanUnique, and WriteBack, along with the IsShared and PassDirty
+response attributes.
 
-The coherence bus is simplified to a single atomic shared bus instead of ACE's independent
-channels, ordering rules, barriers and distributed virtual memory transactions.
+The implementation is intentionally simplified for scope purposes. Rather than reproducing
+ACE's independent channels, ordering rules, barriers, and Distributed Virtual
+Memory (DVM) transactions, the design uses a single atomic shared bus that
+holds ownership for the duration of a coherence transaction.
 *Trade-off:* this is **ACE-inspired, not ACE-compliant**, implementing full ACE is a [Future extension](Future-extensions).
 
-#### AXI4-Lite for memory side.
-This is the one boundary where a standard protocol is both a natural fit and
-cheap: a line fill really is a sequence of plain address/data/response
-transactions with no coherence content. Making it real AXI4-Lite yields a
-reusable slave agent, a full set of protocol assertions, and a place to inject randomised latency and backpressure that stimulates the
-timing relationship between fills and coherence traffic.
-*Trade-off:* AXI4-Lite has no bursts, so a line fill is `LINE_WORDS` separate
-single-beat transactions rather than one burst. AXI4 with bursts would be more realistic (at the cost of
-burst and ID handling).
+#### Memory Interface: AXI4-Lite.
+The memory-side interface uses standard AXI4-Lite because the boundary does
+not require coherence semantics. A cache-line fill or writeback consists of
+ordinary address, data, and response transactions, making AXI4-Lite a natural
+fit for the memory interface.
 
-#### Why not just use one protocol everywhere?
-Different protocols are exercised at different boundaries, like in real SoC's. 
+Using the standard protocol also provides a well-defined interface for the
+verification environment, including independent channel handshaking,
+response checking, randomized latency, and backpressure.
 
-### Microarchitecture START FROM HERE WHEN YOU ARE BACK AUG 25 3:50AM 2026
+Trade-off: AXI4-Lite does not support bursts, so each cache-line transfer
+is decomposed into LINE_WORDS independent single-beat transactions. A full
+AXI4 implementation could transfer an entire line using a burst, but would
+also introduce burst-length, LAST, ID, and outstanding-transaction handling. 
+This is potentially a future extension, but is not included in that section.
 
-#### The bus is atomic, so MESI has no transient states.
-A grant is held across snoop, memory access and response, so a cache is never
-snooped while it owns the bus and every line is in one of the four stable states
-at every clock edge. See [Why the bus is atomic](#why-the-bus-is-atomic).
-*Trade-off:* a split-transaction bus — the realistic next step — requires the
-transient state machine (`IM_AD`, `SM_AD`, …), which is where most genuine MESI
-difficulty lives.
+### Microarchitecture 
 
-#### The cache is blocking, with one outstanding miss.
-MSHRs, hit-under-miss and memory-level parallelism would have consumed the whole
-schedule and displaced the coherence work, which is the point of the project.
-Blocking also keeps the scoreboard's ordering argument tractable: a completing
-access always retires before the ownership transfer that follows it.
-*Trade-off:* the design has no memory-level parallelism and its performance is
-uninteresting. This is a correctness project, not a performance one.
+#### The atomic bus eliminates MESI transient states.
+The bus grant is held across snooping, memory access, and response, ensuring that no cache is snooped while another transaction is in progress. As a result, every cache line remains in one of the four stable MESI states at each clock edge. See [Why the bus is atomic](#scope-decisions-and-limitations).
 
-#### Invalid ways are preferred over the PLRU victim, lowest index first.
-Allocating into a free way avoids a pointless eviction. Breaking ties by lowest
-index rather than arbitrarily keeps victim selection deterministic, which makes
-failures reproducible across seeds.
-*Trade-off:* it biases which ways fill first, so `cg_alloc` covers free-way and
-PLRU-driven victim selection as separate cases to prove both paths run
+Trade-off: A split-transaction bus is the natural next step toward a more realistic implementation that would require explicit transient states (IM_AD, SM_AD, …), where much of the complexity of a full MESI implementation resides.
+
+#### The cache is blocking, with a single outstanding miss.
+The cache permits only one outstanding miss at a time. This avoids the additional complexity of MSHRs, hit-under-miss handling, and memory-level parallelism, keeping the implementation focused on coherence correctness. It also simplifies the verification model: a completing access always retires before the subsequent ownership transfer.
+
+Trade-off: The design does not exploit memory-level parallelism and therefore does not target high-performance cache behavior. Performance is secondary to coherence correctness in this implementation and was therefore scoped out. 
+
+#### Invalid ways are preferred before PLRU victim selection. 
+Allocation first uses an invalid way to avoid an unnecessary eviction. When all ways are valid, the PLRU-selected victim is used ties are resolved by lowest index to keep allocation deterministic and failures reproducible across simulation seeds.
+
+Trade-off: This policy biases the order in which ways are populated, so cg_alloc distinguishes free-way allocation from PLRU-driven replacement to ensure both paths are exercised.
 
 **The bus operation is re-derived every cycle rather than latched at request
 time.**
 This is the only genuine race an atomic bus does not remove, and it is handled
-in the RTL rather than assumed away. Details in
+in the RTL rather than omitted. Details in
 [The one race an atomic bus does not remove](#the-one-race-an-atomic-bus-does-not-remove).
 
-#### Silent clean eviction is implemented, not avoided.
-Dropping an `S` or `E` line without telling anyone is legal MESI, and it means a
-cache can sit in `S` believing a line is shared when it is the only holder. It
-would have been easier to notify on every eviction; implementing the
-conservative-but-imprecise behaviour is more faithful, and it forces the
-reference model to avoid assuming precision.
+#### Clean eviction is silent by design.
+Dropping an S or E line without notifying other caches is legal under MESI. Consequently, a cache may retain S state even when it is the only remaining holder of the line. The implementation deliberately preserves this conservative, potentially imprecise state rather than introducing unnecessary eviction traffic, and the reference model therefore does not assume that S precisely identifies the set of current sharers.
 
 ---
 
 ### Configuration and parameterisation
 
-#### Geometry is a verification variable, not a constant.
-`NUM_WAYS`, `NUM_SETS`, `LINE_BYTES` and `NUM_CORES` are all configurable, for
-three distinct reasons:
+#### Geometry is a verification dimension, not a fixed constant.
 
-1. *It catches baked-in assumptions.* The same environment has to pass at 2-way
-   and 4-way. Anything in the RTL or the checkers that silently assumed two ways
-   fails the moment the 4-way build runs.
-2. *It makes the PLRU claim honest.* At `NUM_WAYS=2` a tree-PLRU is a single bit,
-   which is just LRU. Only at 4 ways is the tree actually a tree. Shipping
-   2-way-only and calling it PLRU would not survive the question "how many bits
-   per set?"
-3. *It lets the default geometry be chosen for verification throughput.* 512
-   bytes per cache is absurdly small for a real design, and that is the point:
-   under random stimulus over a 4 KB region, conflict misses, evictions and
-   writebacks happen constantly instead of rarely.
+`NUM_WAYS`, `NUM_SETS`, `LINE_BYTES` and `NUM_CORES` are configurable for
+three primary reasons:
 
-#### Both geometries are exercised, and the second one is not a formality.
-`eviction_test` passes at 4-way/8-set with no source changes, which is what makes
-the first two claims above evidence rather than intent — at four ways the PLRU is
-genuinely two levels of decision over three bits per set, not a single LRU bit.
-The run also reproduces a textbook microarchitectural effect: writebacks fall
-from 14 to 3, because a working set that thrashed a 2-way set largely fits in a
-4-way one. Associativity reducing conflict misses is not a new result, but seeing
-it fall out of your own design is a useful check that the replacement logic is
-doing what it claims.
+1. It exposes hard-coded assumptions. The same verification environment must operate correctly with both 2-way and 4-way configurations. Any RTL or checker logic that implicitly assumes two ways is exposed when the 4-way configuration is exercised.
+2. It validates the PLRU implementation. At NUM_WAYS=2, tree-PLRU degenerates to a single-bit replacement policy equivalent to LRU. At four ways, the implementation requires the full two-level tree with three state bits per set, providing meaningful verification of the PLRU logic.
+3. It improves verification throughput. The default 512-byte cache capacity is intentionally small for a realistic processor cache. With randomized accesses over a 4 KB region, the configuration produces frequent conflict misses, evictions, and writebacks, increasing the rate at which coherence and replacement behavior are exercised.
 
-#### Configuration is by `+define+`, not module parameters.
-The geometry has to be visible inside a `package` — the address field widths,
-`tag_t` / `index_t` / `line_t`, and the helper functions all depend on it — and
-SystemVerilog packages cannot be parameterised. The UVM classes import that same
-package, so they need the identical values. Build-time defines with
-`` `ifndef `` defaults are the standard way around this.
-*Trade-off:* changing geometry needs a recompile, so it cannot be randomised
-per-run inside a single build. It is a per-build regression axis instead.
+#### Both 2-way and 4-way geometries are exercised. 
+`eviction_test` passes with a 4-way, 8-set configuration without RTL or verification-source changes. This validates that the parameterised replacement logic and verification environment operate correctly beyond the default 2-way configuration. At four ways, tree-PLRU requires a two-level decision structure with three state bits per set, providing meaningful coverage of the full replacement implementation rather than the single-bit case encountered at two ways.
+
+The configuration change also produces the expected reduction in conflict-driven writebacks: the measured count decreases from 14 to 3. The higher associativity allows the working set to occupy more ways within each set, reducing the evictions that occur under the 2-way configuration. This provides an additional sanity check that the replacement policy and cache geometry interact as expected.
+
+#### Configuration is controlled by `+define+`, not module parameters.
+Cache geometry is defined inside a SystemVerilog `package` where address-field widths, `tag_t`, `index_t`, `line_t`, and associated helper functions depend on the selected configuration. Because SystemVerilog packages cannot be parameterised, the geometry must be established at compile time. The UVM environment imports the same package and therefore requires identical configuration values. Build-time +define+ overrides with `` `ifndef `` defaults provide a consistent configuration mechanism across the RTL and verification environment.
+
+Trade-off: changing the cache geometry requires recompilation, so geometry cannot be randomised within a single simulation build. Instead, each geometry is treated as a separate regression configuration.
 
 ### Verification architecture
 
-#### The environment is whitebox on purpose.
-SWMR is a statement about *state*, not about transactions, and it cannot be
-checked from the core interfaces at all. A blackbox-only testbench catches a
-coherence bug only in the seeds where it happens to surface as a wrong load
-result, possibly thousands of cycles after the violation. Tapping the tag and
-state arrays turns a latent, seed-dependent bug into an immediate error.
-*Trade-off:* the testbench is coupled to RTL internal signal names. Contained by
-routing everything through one interface and one generate block in
-[verif/tb/tb_top.sv](verif/tb/tb_top.sv), so a rename touches one file.
+#### The environment intentionally uses white-box observability.
+The Single-Writer/Multiple-Reader (SWMR) invariant is a property of cache-line state rather than transaction behavior, so it cannot be verified solely from the core-facing interfaces. A black-box testbench may detect a coherence violation only after it propagates into a visible data mismatch, potentially many cycles after the original state error occurred. The verification environment therefore exposes the internal tag and MESI state arrays through a dedicated probe interface. This allows illegal coherence states to be detected at the point they occur rather than only through their downstream effects.
 
-#### The probe is wired with hierarchical assignments rather than `bind`.
-`bind` is the more idiomatic construct, but the target flow was uncertain and
-hierarchical references index identically on every simulator. `bind` *is* used
-for the assertion modules, where it is both standard and well supported.
-*Trade-off:* slightly less elegant; trivially switchable once the flow is known.
+Trade-off: the verification environment depends on selected RTL-internal signal names. This coupling is localized to a single interface and generate block in verif/tb/tb_top.sv, this attempts to limit the impact of RTL hierarchy or signal-name changes.
 
-**Golden memory is ordered by monitor completion time, with an argument rather
-than a mechanism.**
-No global-order reconstruction, no timestamping infrastructure. Coherence
-already serialises same-address accesses, and the reasoning is written out in
-[What gets checked](#what-gets-checked). Building an order-reconstruction engine
-would have been more code and more places to be wrong.
+#### Probe connectivity uses hierarchical assignments rather than `bind`. 
+The probe interface is connected to the cache internals using hierarchical assignments. Although bind is generally the more idiomatic mechanism for attaching verification logic to RTL, hierarchical references provided more predictable behavior across the simulators targeted by this project.
 
-#### Unwritten memory returns a deterministic hash of its address.
-`mem_model::backing_value()` is used both by the AXI4-Lite slave and to seed the
-scoreboard's golden memory, so a load from a location the test never wrote still
-has exactly one correct answer. The usual "X on the first read" blind spot
-disappears without pre-initialising memory or restricting the address space.
+`bind` is still used for the assertion modules, where simulator support is well established and the mechanism naturally matches the intended use.
 
-#### *Coverage is reported by the testbench itself.
-The target flow has no coverage database and no way to merge across runs, so
-`final_phase` prints its own table via `get_inst_coverage()`. This is
-simulator-independent and survives any flow.
-*Trade-off:* no cross-run merging, so the reported number is per-run rather than
-cumulative.
+Trade-off: hierarchical connectivity introduces a tighter dependency on the RTL hierarchy, but the implementation is isolated and can be replaced with `bind` if tool support permits.
 
-#### Forbidden protocol states are `illegal_bins`, not uncovered bins.
-An uncovered bin is something you failed to hit. An illegal bin is something the
-protocol forbids, and hitting it is an error at the moment it happens. Encoding
-the eight forbidden MESI state pairs this way turns the coverage model into a
-checker.
+#### Unwritten memory locations have deterministic initial values.
+`mem_model::backing_value()` derives a deterministic value from each address and is used consistently by both the AXI4-Lite memory model and the scoreboard's golden memory. As a result, a load from an address that has not previously been written still has a well-defined expected value. This eliminates unknown-value behavior on initial reads without requiring explicit memory pre-initialization or restricting stimulus to a pre-populated address range.
 
-#### Bugs are injectable by `+define+`.
-Five one-line RTL mutations, each of which must make the regression fail. It is
-the cheapest available evidence that the checkers actually check something,
-rather than a testbench that passes because it looks at nothing.
+#### Functional coverage is reported directly by the testbench.
+The target simulation flow does not provide a persistent coverage database suitable for merging results across runs. The UVM environment reports functional coverage directly from final_phase using get_inst_coverage(). This keeps coverage reporting independent of simulator-specific database tooling and ensures that every simulation produces an immediately visible coverage summary.
+
+Trade-off: coverage is reported independently for each simulation and is not accumulated across regression runs. Reported percentages only represent single-run coverage rather than merged regression coverage (which is also a tooling constraint).
+
+#### Forbidden protocol states are encoded as `illegal bins`.
+Coverage bins representing protocol-valid behavior and measure whether the corresponding scenario has been exercised. Protocol-forbidden behavior is modeled differently: the eight invalid two-cache MESI state combinations are encoded as `illegal_bins`. Reaching one of these combinations produces an immediate simulation error rather than merely affecting the coverage percentage. This allows the functional coverage model to serve both as a measurement mechanism and as an additional coherence checker.
+
+#### RTL defects can be injected through compile-time `+define+`.
+Five deliberate, single-point RTL mutations are controlled through +define+ options. Each mutation represents a specific defect class and is expected to cause the associated verification run to fail. These fault-injection experiments provide direct evidence that the verification mechanisms are capable of detecting the classes of errors they are intended to monitor, rather than relying solely on successful clean regressions as evidence of checker effectiveness.
 
 ---
 
-## The cache
+## The cache 
 
 | Parameter | Default | Override |
 |---|---|---|
@@ -285,9 +240,7 @@ rather than a testbench that passes because it looks at nothing.
 | `NUM_WAYS` | 2 | `+define+CFG_NUM_WAYS=n` (power of two) |
 | `LINE_BYTES` | 16 (4 words) | `+define+CFG_LINE_BYTES=n` |
 
-512 bytes per cache by default — deliberately tiny, so conflict misses and
-evictions are common rather than rare. Reasoning in
-[Design decisions](#configuration-and-parameterisation).
+512 bytes per cache by default. Reasoning in [Design decisions](#configuration-and-parameterisation).
 
 **Policy:** write-back, write-allocate, blocking (one outstanding miss).
 
@@ -332,8 +285,8 @@ the writeback is skipped.
 
 A `CleanUnique` is only ever issued by a cache already holding the line in **S**.
 By SWMR no other cache can then hold it **E** or **M**, so those table entries
-are unreachable — which is why the RTL re-derives its bus operation at grant
-time (see below).
+are unreachable (which is why the RTL re-derives its bus operation at grant
+time, see below).
 
 ### Eviction
 
@@ -343,107 +296,71 @@ time (see below).
 | **S** / **E** | silent drop, no bus traffic |
 | **M** | `WriteBack` to memory, then **I** |
 
-Silent clean eviction is legal MESI and is deliberately implemented: it means
-another cache can sit in **S** believing the line is shared when it is in fact
+Silent clean eviction means another cache can sit in **S** believing the line is shared when it is in fact
 the only holder. The protocol is conservative rather than precise, and the
 reference model must not assume otherwise.
 
 ### Where dirty data goes
 
-Every coherence protocol has to answer one question: *at any moment, who is
-responsible for the only up-to-date copy of a line?* MESI answers it with a
-single rule — **only a cache in M may hold data that memory does not have**.
-Everything below is a consequence of that rule.
+MESI must maintain a single source of responsibility for the most recent value of each cache line. Its defining constraint is that only a cache in the M state may hold data that differs from memory. The handling of dirty data during coherence transactions follows directly from this constraint.
 
-The consequence that is easy to miss: **S** means *clean and shared*, so a line
-cannot be both dirty and shared. The moment a modified line becomes shared, the
-dirtiness has to go somewhere, and the only place available is memory.
+The S state represents clean, shared data; therefore, a line cannot remain dirty once it becomes shared. When an M-state line is observed by another cache, the modified data must either be committed to memory or transferred to a new exclusive owner.
 
-- `ReadShared` hitting **M** → the snooper supplies the line to the requester
-  **and** the interconnect writes it back to memory in the same atomic
-  transaction. Both caches end in **S** and memory is current, so the rule holds.
-- `ReadUnique` hitting **M** → the dirty line is handed straight to the
-  requester, which becomes **M** while the snooper goes to **I**. Memory is
-  *not* updated, and does not need to be: there is still exactly one **M**
-  holder, so responsibility has simply changed hands.
+   - ReadShared hitting M → the snooping cache supplies the modified line to the requester, while the interconnect simultaneously writes the data back to memory. Both caches transition to S, leaving memory up to date.
+   - ReadUnique hitting M → the snooping cache transfers the modified line directly to the requester and transitions to I. The requester becomes M. Memory remains stale, which is valid because responsibility for the most recent copy has simply transferred to the new M-state cache.
 
-**This is exactly what the O state in MOESI buys.** MOESI adds *Owned* — dirty
-but shared — letting one cache remain responsible for modified data while others
-read it, deferring the writeback until eviction. That saves a memory write on
-every `ReadShared` that hits a modified line. MESI cannot express that state, so
-it pays the write immediately.
+This is the key distinction between MESI and MOESI. MOESI adds the O (Owned) state, which permits a cache to retain responsibility for dirty data while allowing other caches to hold shared copies. The owner can therefore defer the memory writeback until eviction. MESI has no equivalent state, so a ReadShared intervention on an M-state line requires the modified data to be written back to memory immediately.
 
-The cost is visible in this project's own results: `cg_axil` reaches 100 % on
-tests that report `WriteBack=0`, because dirty *interventions* generate AXI
-writes even when no line is ever evicted.
+The cost of this design choice is observable in the verification results: cg_axil can reach 100% on tests with WriteBack=0 because an M-state intervention can generate AXI4-Lite write traffic even when no cache line is evicted.
 
 ### Why the bus is atomic
 
-The interconnect grants one master at a time and holds that grant across snoop,
-memory access and response. A cache is therefore **never snooped while it holds
-a grant**, which means every line is in one of the four stable states at every
-clock edge.
+The interconnect grants ownership to one master at a time and retains that grant through the snoop, memory-access, and response phases of the coherence transaction. **A cache is therefore never snooped while it holds the bus grant**, ensuring that each cache line remains in one of the four stable MESI states at every clock edge.
 
-**What that buys is the absence of transient states**, and it is worth spelling
-out why they would otherwise be necessary. MESI is usually drawn as a four-state
-diagram, but that diagram is only accurate if state changes are instantaneous.
-On a real bus they are not. Consider a cache in **I** that wants to store: it
-issues `ReadUnique` and waits. Between issuing the request and receiving the
-line it is in neither **I** nor **M** — it has committed to an upgrade that has
-not completed. If a snoop arrives during that window the cache must answer
-something, and neither "I hold this line" nor "I do not" is truthful.
+The primary consequence is the elimination of transient coherence states. A conventional MESI state diagram assumes that state transitions occur instantaneously, but a split-transaction implementation introduces an interval between requesting a transaction and receiving its result.
+`
+For example, a cache in I that issues `ReadUnique` to satisfy a store has committed to acquiring the line but has not yet received it. During this interval, the cache is neither fully in I nor M. If another cache issues a snoop during this window, the requester must respond according to a state that represents an incomplete transaction.
 
-Protocols resolve this by adding **transient states**, conventionally named for
-the transition in progress and the events still outstanding: `IM_AD` reads as
-"moving from I to M, awaiting Address (bus grant) and Data". A realistic MESI
-implementation carries a handful of them, and each one adds rows to the
-snoop-response table, because a cache caught mid-flight still has to reply
-correctly.
+Realistic MESI implementations address this by introducing transient states that encode both the stable state being exited and the transaction currently in progress. For example, IM_AD represents a transition from I toward M while awaiting the address and data phases. Each transient state introduces additional cases that must be handled by both the RTL and the verification environment.
 
-Holding the grant across the entire transaction collapses that window to zero.
-A cache is only ever snooped while it is *not* mid-transaction, so the
-four-state diagram is literally true and the snoop-response table stays 4×3.
+Holding the bus grant across the complete coherence transaction eliminates this intermediate window. A cache can only be snooped when it is not participating in an active transaction, allowing the implementation to operate entirely on the four stable MESI states. The resulting snoop-response logic therefore remains a compact 4×3 state/op table rather than requiring additional transient-state cases.
 
-This is a scoping decision rather than an oversight, and it is the honest
-boundary of the project: **most of the genuine difficulty in MESI lives in the
-transient states**, and this design does not have them. The natural next step is
-a split-transaction bus, which requires the transient state machine and roughly
-triples both the RTL and the verification effort.
+**This is an intentional scope decision rather than an omission**. Transient-state handling represents a substantial portion of the complexity in a realistic MESI implementation, and this project deliberately isolates the stable-state coherence behavior. A natural next step would be a split-transaction interconnect with explicit transient states, which would substantially increase both RTL and verification complexity. See [Future extensions](#future-extensions).
 
 ### The one race an atomic bus does not remove
+Atomic bus ownership eliminates races during an active coherence transaction, but it does not prevent a cache from being snooped while it is waiting for arbitration. Consider the following sequence:
 
-A cache can decide it needs the bus, and then be snooped before it is granted:
+> Cache 0 holds line X in **S** and requests the bus for `CleanUnique`.
+> Cache 1 wins arbitration first and issues `ReadUnique` on X, invalidating cache 0.
+> Cache 0's pending upgrade is now stale because it no longer holds the line.
 
-> Cache 0 holds line X in **S** and requests the bus intending `CleanUnique`.
-> Cache 1 wins arbitration first and issues `ReadUnique` on X, invalidating
-> cache 0. Cache 0's pending upgrade is now wrong — it no longer has the data.
+The RTL handles this case by deriving `bus.op` **combinationally from the current cache state on every cycle** 
+rather than latching the operation when the request is first generated. A pending `CleanUnique` therefore becomes a `ReadUnique`
+if the cache is invalidated before arbitration completes. Similarly, a pending `WriteBack` is withdrawn if a snoop downgrades the victim before the writeback is granted. 
 
-The RTL handles this by deriving `bus.op` **combinationally from current state
-every cycle** rather than latching it at request time. The pending `CleanUnique`
-degrades into a `ReadUnique`, and a pending `WriteBack` whose victim was
-downgraded simply withdraws its request. A consequence is that `bus.req` may
-deassert before it is granted, which is legal on this bus and is checked by
-assertion `a_bus_progress` ("grant or retire, but do not hang").
+This also means `bus.req` may **deassert** before receiving a grant. That behavior is legal for the implemented bus protocol and is verified by `a_bus_progress`, which requires a request to either receive a grant or retire without becoming permanently outstanding.
 
-**Measured.** `upgrade_race_test` drives both caches into **S** and issues
-simultaneous stores. The number of rounds is randomised in `[4:8]` and this seed
-chose six; the lines themselves are consecutive from the region base, one per
-round, so no round can conflict with another in the same set. The result:
+Measured validation. `upgrade_race_test` drives both caches into S and then issues simultaneous stores to the same line. The test randomizes the number of rounds between 4 and 8 and the reported seed executed six rounds. Each round operates on a consecutive line, preventing conflicts between rounds.
 
 ```
 ReadShared=12  ReadUnique=6  CleanUnique=6  WriteBack=0
 state transitions=42
 ```
 
-Six rounds produced **six `CleanUnique` and six `ReadUnique`** — a perfect 1:1.
-Every round had one winner that completed its upgrade and one loser whose pending
-`CleanUnique` had to be re-derived as a `ReadUnique` after being invalidated. The
-degradation path executed on 100 % of rounds, and no data was lost.
+Six rounds produced **six `CleanUnique` and six `ReadUnique`**, which is expected of the 1:1 relationship
+between the winning and losing upgrade attempts. In every round, one cache completed its `S->M` upgrade while the losing
+cache was invalidated before its pending `CleanUnique` could be granted. That stale request was subsequently re-derived 
+as `ReadUnique`, exercising hte intended race-resolution path on every round without data loss. 
 
-The transition count is exactly derivable, which is a useful independent check:
-per round the line goes `I→E` (first load), `E→S` plus `I→S` (second load),
-`S→M` plus `S→I` (the race), then `M→I` plus `I→M` (the loser's `ReadUnique`).
-Seven transitions × six rounds = 42, which is what the scoreboard counted.
+The measured state-transition count provides an independent consistency check. Each round produces:
+
+`I→E` → `E→S` + `I→S` → `S→M` + `S→I` → `M→I` + `I→M`
+
+This corresponds to seven state transitions per round. Across six rounds:
+
+**7 transitions × 6 rounds = 42 transitions**
+
+which matches the count reported by the scoreboard.
 
 ---
 
@@ -451,10 +368,11 @@ Seven transitions × six rounds = 42, which is what the scoreboard counted.
 
 | File | Interface | Notes |
 |---|---|---|
-| [rtl/core_if.sv](rtl/core_if.sv) | `core_if` | OBI-style. Clocking blocks for driver and monitor. |
-| [rtl/bus_if.sv](rtl/bus_if.sv) | `bus_if` | Per-master fields are **unpacked arrays** so each cache drives only its own element; no modports, to avoid false multi-driver errors on a shared packed vector. |
-| [rtl/axil_if.sv](rtl/axil_if.sv) | `axil_if` | Full AXI4-Lite, five channels. |
-| [rtl/cache_probe_if.sv](rtl/cache_probe_if.sv) | `cache_probe_if` | Whitebox tap, driven by hierarchical assignment from [verif/tb/tb_top.sv](verif/tb/tb_top.sv). |
+| [rtl/core_if.sv](rtl/core_if.sv) | `core_if` | OBI-style core interface with dedicated clocking blocks for the driver and monitor. |
+| [rtl/bus_if.sv](rtl/bus_if.sv) | `bus_if` | Per-master signals are implemented as **unpacked arrays**, allowing each cache to drive only its corresponding element. Modports are intentionally omitted to avoid false multi-driver errors on the shared interface. |
+| [rtl/axil_if.sv](rtl/axil_if.sv) | `axil_if` | Full AXI4-Lite interface spanning all five channels. |
+| [rtl/cache_probe_if.sv](rtl/cache_probe_if.sv) | `cache_probe_if` | White-box verification interface driven through hierarchical assignments from [verif/tb/tb_top.sv](verif/tb/tb_top.sv). |
+
 
 ---
 
@@ -462,106 +380,102 @@ Seven transitions × six rounds = 42, which is what the scoreboard counted.
 
 ```mermaid
 graph TB
+
   VSQ["cache_vsequencer"] --> CA0 & CA1
+
   CA0["core_agent[0]<br/>driver / sequencer / monitor"] --> SB & COV
   CA1["core_agent[1]"] --> SB & COV
+
   BM["bus_monitor (passive)"] --> SB & COV
+
   PM0["probe_monitor[0]<br/>MESI transition stream"] --> SB & COV
   PM1["probe_monitor[1]"] --> SB & COV
+
   AX["axil_agent<br/>slave responder + mem_model"] --> COV
   AX -.->|mem_model shared| SB
+
   SB["coherence_scoreboard<br/>golden memory · SWMR · transition legality"]
-  COV["cache_coverage<br/>cg_core cg_bus cg_mesi cg_share cg_alloc cg_axil"]
+
+  COV["cache_coverage<br/>cg_core · cg_bus · cg_mesi · cg_share · cg_alloc · cg_axil"]
 ```
 
 | Component | Role |
 |---|---|
-| [core_agent](verif/agents/core_agent/core_agent.sv) | Active OBI master, one per core. Monitor pairs the address phase with the response phase and emits a completed transaction. |
-| [axil_agent](verif/agents/axil_agent/axil_agent.sv) | AXI4-Lite **slave** responder backed by [mem_model](verif/agents/axil_agent/mem_model.sv), with randomised per-channel latency. Its monitor feeds coverage; the scoreboard reads the memory model directly at end of test. |
-| [bus_monitor](verif/agents/bus_agent/bus_monitor.sv) | Passive. Reconstructs each coherent transaction: op, requester, snoop hits, `PassDirty`, `IsShared`, line data. |
-| [probe_monitor](verif/agents/probe_agent/probe_monitor.sv) | Whitebox. Emits one item per observed line-state change, giving a clean MESI transition stream. |
-| [coherence_scoreboard](verif/env/coherence_scoreboard.sv) | All checking. |
-| [cache_coverage](verif/env/cache_coverage.sv) | All functional coverage, plus a self-printed coverage table. |
-
-### Sampling discipline
-
-Monitors read signals immediately after `@(posedge clk)` rather than through a
-clocking block.
-
-That needs justifying, because sampling a signal on the same edge that drives it
-is the classic SystemVerilog race. It is safe here because of scheduling
-semantics rather than luck: the RTL drives these signals from **non-blocking**
-assignments, which are *evaluated* in the Active region but do not *update* until
-the NBA region, strictly later within the same time step. A monitor that wakes in
-the Active region therefore reads the pre-edge value — the same value the RTL
-itself used when it made its decision — and does so deterministically on every
-simulator.
-
-A clocking block expresses that intent directly and would be the default choice.
-It is not used because `bus_if` carries unpacked arrays, whose support inside
-clocking blocks varies between simulators, and portability across the two
-toolchains mattered more than idiom.
-*Trade-off:* the guarantee now rests on an RTL coding convention — drive this
-interface with non-blocking assignments — rather than being enforced by the
-language. A signal driven combinationally into the interface would break the
-argument silently, with no error anywhere.
+| [core_agent](verif/agents/core_agent/core_agent.sv) | Active OBI master, instantiated once per core. The monitor correlates the address and response phases and emits a completed transaction. |
+| [axil_agent](verif/agents/axil_agent/axil_agent.sv) | AXI4-Lite **slave responder** backed by [mem_model](verif/agents/axil_agent/mem_model.sv), with randomized per-channel latency. The monitor feeds coverage, while the scoreboard accesses the shared memory model directly at end of test. |
+| [bus_monitor](verif/agents/bus_agent/bus_monitor.sv) | Passive monitor that reconstructs each coherence transaction, including the operation, requester, snoop hits, `PassDirty`, `IsShared`, and line data. |
+| [probe_monitor](verif/agents/probe_agent/probe_monitor.sv) | White-box monitor that emits one item for each observed cache-line state transition, producing a direct MESI transition stream. |
+| [coherence_scoreboard](verif/env/coherence_scoreboard.sv) | Centralized checking component responsible for coherence validation, golden-memory comparison, SWMR invariant checking, and MESI transition legality. |
+| [cache_coverage](verif/env/cache_coverage.sv) | Centralized functional coverage model covering core, bus, MESI, sharing, allocation, and AXI4-Lite behavior, with a self-reported coverage summary. |
 
 ---
 
-## What gets checked
+## Verification strategy
 
-Six independent mechanisms, chosen so that no single one has to catch everything:
+## Verification Strategy
 
-**1. Data-value invariant (golden memory).**
-Every store observed at a core interface is applied to a reference memory; every
-load is compared against it. Ordering is by monitor completion time. That is
-sound because coherence serialises same-address accesses — a core can only write
-while it is **M**, and transferring ownership takes several cycles, so a
-completing access always retires before the transfer that follows it. Two
-same-address accesses completing in the same cycle would itself be an SWMR
-violation, which mechanism 3 catches.
+The environment uses **six complementary checking mechanisms**, each targeting a distinct class of correctness. The checks are intentionally independent so that no single mechanism is responsible for detecting every failure mode.
 
-**2. MESI transition legality.**
-Every state change from the probe stream is checked against a legality table. A
-change of *tag* is an allocation, and is legal only if the previous occupant was
-clean — so allocating over a modified way (dirty data dropped without a
-writeback) is caught immediately rather than thousands of cycles later.
+### 1. Data-Value Invariant (Golden Memory)
 
-**3. SWMR invariant.**
-Single-Writer / Multiple-Reader is the defining safety property of any coherence
-protocol, and it is worth stating precisely: *for any one line, at any one
-moment, either exactly one cache may write it and no other cache holds a copy,
-or any number of caches may read it and none may write.* Every MESI state encodes
-a position in that statement — **M** and **E** are the single-writer case, **S**
-is the multiple-reader case, **I** is abstention.
+Every store observed at a core interface updates a reference memory; every load is checked against the expected value. Ordering follows **monitor completion time**.
 
-The check is a per-line census across both caches, re-run whenever any line
-changes state: at most one **M**-or-**E** holder, and never an exclusive holder
-coexisting with sharers.
+Coherence serializes same-address accesses: a core may write only while holding **M**, and ownership transfers require multiple cycles. Therefore, an access must complete before a subsequent ownership transfer can retire. Two same-address accesses completing in the same cycle would itself violate the SWMR invariant and are caught by the dedicated SWMR checker.
 
-Note what kind of statement this is. SWMR constrains *state*, not transactions,
-which is why no amount of watching the core interfaces can verify it, and why
-the whitebox probe exists at all. The sweep is gated on the transition stream
-rather than run blindly every cycle, which is both cheaper and sufficient: state
-can only become illegal at the moment it changes.
+### 2. MESI Transition Legality
 
-**4. Sharer data agreement.**
-Every cache holding a line in **S** must hold identical data for it.
+Every state transition observed on the probe stream is checked against a **MESI legality table**.
 
-**5. Bus-level consistency.**
-`IsShared` must agree with the observed snoop hits, and an upgrade must never
-move data. These check the interconnect's own aggregation logic rather than the
-caches.
+Tag changes are treated as allocations and are permitted only when the previous occupant is clean. This catches cases where a modified line is silently evicted without first being written back, preventing the resulting data loss from propagating unnoticed through the simulation.
 
-**6. End-of-test memory reconciliation.**
-For every word the test touched, the expected value is compared against the
-*actual* system state: the dirty cached copy if some cache still holds the line
-**M**, otherwise the AXI4-Lite memory. This is the backstop that catches dirty
-data quietly lost anywhere in the run.
+### 3. SWMR Invariant
+
+**Single-Writer / Multiple-Reader (SWMR)** is the fundamental safety invariant of the coherence protocol:
+
+> For any cache line at any moment, either exactly one cache may write the line while no other cache holds a copy, or multiple caches may hold copies while none may write.
+
+The MESI states encode these cases directly:
+
+* **M / E:** single-writer ownership
+* **S:** multiple-reader ownership
+* **I:** no ownership
+
+The checker maintains a per-line census across both caches and re-evaluates it whenever a line changes state. It enforces that:
+
+* At most one cache holds **M** or **E** for a line.
+* An **M/E** holder never coexists with **S** sharers.
+
+SWMR is a **state invariant**, not a transaction property. Core-interface transactions alone cannot establish that the caches are simultaneously maintaining legal ownership, which is why the environment exposes internal MESI state through a dedicated whitebox probe. The check is triggered by state transitions rather than evaluated every cycle: a coherence state can become illegal only when it changes.
+
+### 4. Sharer Data Agreement
+
+All caches holding a line in **S** must contain identical data.
+
+This check complements the SWMR invariant by verifying not only that shared ownership is legal, but that every sharer actually observes the same value.
+
+### 5. Bus-Level Consistency
+
+The coherence bus is checked independently from cache state:
+
+* `IsShared` must agree with the observed snoop hits.
+* An upgrade transaction must not transfer or modify data.
+
+These checks isolate errors in the interconnect's aggregation and transaction-classification logic from errors originating inside the caches.
+
+### 6. End-of-Test Memory Reconciliation
+
+At the end of each test, every word touched during the run is reconciled against the **actual final system state**.
+
+If a cache still holds the corresponding line in **M**, the dirty cached value is treated as authoritative; otherwise, the AXI4-Lite memory value is compared against the expected reference-memory value.
+
+This serves as the final backstop for **silent dirty-data loss**, catching cases where a modified line disappears without a corresponding writeback even if no earlier transaction-level check exposed the failure.
+
 
 ---
 
-## Functional coverage
+## Functional coverage 
+
+Functional coverage is organized around six covergroups, each targeting a distinct dimension of cache, coherence, allocation, or interface behaviour.
 
 | Covergroup | Covers |
 |---|---|
@@ -569,13 +483,12 @@ data quietly lost anywhere in the run.
 | `cg_bus` | coherent op × requester × snoop hit × `PassDirty` × `IsShared`; includes dirty intervention, where a snooper supplies data instead of memory |
 | `cg_mesi` | old state × new state × tag-changed, per core |
 | `cg_share` | **cache 0 state × cache 1 state for one line** |
-| `cg_alloc` | victim state at allocation × way × set × core — proves every way gets replaced and that both free-way and PLRU-driven victim selection occur |
-| `cg_axil` | AXI4-Lite direction × word position within the line — proves every beat of a line is both fetched and written back |
+| `cg_alloc` | victim state at allocation × way × set × core; verifies both free-way and PLRU-driven victim selection and exercises every way |
+| `cg_axil` | AXI4-Lite direction × word position within the line; verifies every beat of a line is both fetched and written back |
 
 ### The illegal bins
 
-`cg_mesi` and `cg_share` are written so the forbidden cases are `illegal_bins`,
-i.e. simulation errors:
+The `cg_mesi` and `cg_share` covergroups encode protocol violations as `illegal_bins`, turning forbidden states and transitions into simulation errors rather than merely uncovered coverage points.
 
 ```systemverilog
 // cg_share — every state pair MESI forbids
@@ -589,10 +502,13 @@ illegal_bins dirty_dropped = binsof(cp_old)  intersect {MESI_M} &&
                              binsof(cp_tagc) intersect {1};
 ```
 
-The derivation is worth doing explicitly, because "eight of sixteen" is the kind
-of number that should not be taken on trust. Two caches and four states give
-4 × 4 = 16 ordered pairs. SWMR admits a pair if and only if it places neither two
-writers, nor a writer alongside a reader, on the same line:
+#### Deriving the Shareability Cross
+
+The `cg_share` cross contains two caches and four MESI states, producing:
+
+`4 x 4 = 16` ordered state pairs.
+
+A pair is legal if and only if it does not place two writers, or a writer alongside a reader, on the same cache line. 
 
 | | c1 = **I** | c1 = **S** | c1 = **E** | c1 = **M** |
 |---|---|---|---|---|
@@ -601,25 +517,24 @@ writers, nor a writer alongside a reader, on the same line:
 | **c0 = E** | legal | illegal `es` | illegal `ee` | illegal `em` |
 | **c0 = M** | legal | illegal `ms` | illegal `me` | illegal `mm` |
 
-Eight legal, eight illegal, and the eight illegal entries are exactly the
-`illegal_bins` in the source, named `<c0><c1>`. The **I** row and column are
-legal throughout for a simple reason: an invalid cache holds no copy, so it
-constrains nobody.
+This produces **8 legal and 8 illegal combinations**. The eight illegal combinations are encoded directly as `illegal_bins` in the source and named <c0><c1>.
 
-The table is also asymmetric in name only — `se` and `es` are distinct bins
-because the cross is over ordered pairs, but they describe the same physical
-violation seen from opposite cores. Keeping both named separately means a failure
-report says *which* cache was the exclusive holder.
+The I row and column are legal throughout because an invalid cache holds no copy of the line and therefore imposes no ownership constraint.
 
-Unreachable cross bins (same state with no tag change; allocation producing an
-invalid line) are excluded with `ignore_bins` so that 100 % is an achievable
-target rather than a permanently unreachable one.
+The cross is over **ordered pairs**, so `se` and `es` are distinct bins even though they represent the same physical class of violation. Keeping both bins preserves which cache held the conflicting exclusive state in a coverage or failure report.
 
-### Coverage reporting
+#### Unreachable Bins
 
-There is no tool coverage database in the target flow, so
-[cache_coverage.sv](verif/env/cache_coverage.sv) prints its own table from
-`final_phase` using `get_inst_coverage()` and `$get_coverage()`:
+Unreachable combinations are excluded with ignore_bins, including:
+
+  - Same MESI state with no tag change where a transition cannot occur.
+  - Allocations that produce an invalid line.
+
+This keeps the coverage model focused on reachable architectural behavior and makes 100% coverage an achievable.
+
+### Coverage reporting 
+
+There is no persistent simulator coverage database in the default flow. Instead, [cache_coverage.sv](verif/env/cache_coverage.sv) reports coverage directly during `final_phase` using `get_inst_coverage()` and `$get_coverage()`:
 
 ```
 UVM_INFO ... [COV] ---------------- functional coverage ----------------
@@ -632,73 +547,71 @@ UVM_INFO ... [COV]   cg_share   ..... %
 UVM_INFO ... [COV]   OVERALL    ..... %
 ```
 
-This is simulator-independent and survives flows that cannot merge UCDBs.
+This approach is simulator-independent and remains usable in environments that cannot generate or merge coverage databases.
 
-**Every run is independent — coverage does not accumulate.** Each run launches a
-fresh `simv`, the covergroups are constructed in the coverage component's
-constructor, and nothing is written to disk. `get_inst_coverage()` therefore
-reports what *this one simulation* sampled and nothing else. Running twelve tests
-in sequence does not produce a twelve-test number; it produces twelve unrelated
-numbers. Since different tests close different bins — the directed walk closes
-transitions the random tests miss, `eviction_test` closes victim states nothing
-else reaches — the true union is strictly higher than any figure quoted in this
-README. Merging requires a coverage database (`vcs -cm line+cond+fsm+branch`,
-then `urg`), which is the first item under
-[Future extensions](#1-a-simulator-without-a-licence-ceiling).
+**Coverage is reported per simulation, not accumulated across the regression.** 
+
+Each test launches a fresh `simv`, constructs a new set of covergroups, and writes no coverage database to disk. Consequently, `get_inst_coverage()` reports only the bins sampled during that simulation.
+
+Different tests intentionally target different regions of the coverage space. For example, the directed MESI walk closes transitions that random traffic may not encounter, while eviction_vseq targets victim states and replacement behaviour that other tests may rarely reach.
+
+A regression-wide coverage number therefore requires database collection and merging, such as a VCS coverage flow using `-cm` followed by `urg`. Persistent regression coverage is listed as a [future extension](#future-extensions) of the project.
 
 ---
 
 ## Assertions
 
+Three SVA modules verify protocol properties independently of the UVM scoreboards and functional coverage. 
+
 | File | Scope | Representative properties |
 |---|---|---|
-| [verif/sva/cache_sva.sv](verif/sva/cache_sva.sv) | `bind` into every `l1_cache` | OBI request stability and payload stability; exactly one response per accepted request; **`a_grant_excludes_snoop`** — a cache holding a grant is never snooped, which is the assumption the whole no-transient-state argument rests on; `a_op_frozen_while_granted`; `a_bus_progress` |
-| [verif/sva/bus_sva.sv](verif/sva/bus_sva.sv) | interconnect | grant and response one-hot-zero; ownership never transfers without an idle cycle; snoop never targets the owner; **`a_single_pass_dirty`** — at most one cache may supply dirty data, because at most one may hold it |
-| [verif/sva/axil_sva.sv](verif/sva/axil_sva.sv) | AXI4-Lite | per-channel valid/payload stability until ready, `OKAY` responses, address alignment, no `B` without a preceding `AW` **and** `W`, no `R` without `AR` |
+| [verif/sva/cache_sva.sv](verif/sva/cache_sva.sv) | `bind` into every `l1_cache` | OBI request and payload stability; exactly one response per accepted request; `a_grant_excludes_snoop`; `a_op_frozen_while_granted`; bus progress |
+| [verif/sva/bus_sva.sv](verif/sva/bus_sva.sv) | Coherence interconnect | One-hot-or-zero grants and responses; ownership transfer requires an idle cycle; snoops never target the current owner; `a_single_pass_dirty` |
+| [verif/sva/axil_sva.sv](verif/sva/axil_sva.sv) | AXI4-Lite interface | Per-channel valid and payload stability until ready; `OKAY` responses; address alignment; no `B` without preceding `AW` and `W`; no `R` without `AR` |
 
-`cache_sva` is attached with `bind`, so the assertions live outside the RTL and
-are instantiated per cache automatically.
+The cache-level assertions are attached using bind, keeping verification logic outside the RTL while instantiating the assertion module for every cache instance.
+
+Several properties also encode assumptions used by the cache architecture itself. For example, `a_grant_excludes_snoop` guarantees that a cache holding a core-side grant cannot simultaneously receive a snoop request, supporting the design's avoidance of transient MESI states.
 
 ---
 
 ## Stimulus
 
+The environment combines **constrained-random and directed virtual sequences**. Constrained-random sequences explore broad transaction spaces, while directed sequences establish specific interleavings or state transitions that must occur in a known order. 
+
 ### Directed vs constrained-random
 
-Eight of the eleven virtual sequences are **constrained-random** and differ only
-in how tightly they are constrained — narrowing the address window, fixing the
-set, or pinning the load/store mix in order to steer randomisation at a
-particular coherence behaviour.
+Eight of the eleven virtual sequences use **constrained-random** stimulus. They differ primarily in the constraints applied to address selection, cache-set selection, and load/store distribution to increase the probability of particular coherence behaviours.
 
-Three are **fully directed**, and they exist for reasons random stimulus cannot
-cover:
+Three are **fully directed**, and they exist for reasons random stimulus cannot cover:
 
 | Directed sequence | Why it must be directed |
 |---|---|
-| `mesi_walk_vseq` | Walks every legal same-line MESI transition in a known order on an empty cache. Closes `cg_mesi` **by construction** instead of hoping a seed reaches `M→S`. A failure names the exact transition rather than "somewhere in 80 random accesses". |
-| `upgrade_race_vseq` | Deliberately creates the `CleanUnique`→`ReadUnique` degradation — the one race an atomic bus does not remove. Random traffic hits it only by coincidence. |
-| `producer_consumer_vseq` | Message-passing litmus test. The ordering claim it checks is meaningless unless the ordering is fixed. |
+| `mesi_walk_vseq` | Traverses every legal same-line MESI transition in a known order on an empty cache, closing transition coverage deterministically |
+| `upgrade_race_vseq` | Deliberately creates the `CleanUnique` → `ReadUnique` degradation that occurs when competing upgrades overlap |
+| `producer_consumer_vseq` | Implements a message-passing litmus test with a fixed ordering between producer and consumer |
 
-The directed sequences drive both cores through `do_access()`, which blocks until
-`rvalid`, so calling it sequentially gives a strict interleaving between the two
-caches. That determinism is the whole point.
+The directed sequences issue operations through `do_access()`, which blocks until `rvalid`. Sequential calls therefore establish an explicit interleaving between the two cores.
 
-### Core-level sequences ([verif/agents/core_agent/core_seq_lib.sv](verif/agents/core_agent/core_seq_lib.sv))
+### Core-level sequences 
+
+Core-level sequences, implemented in ([verif/agents/core_agent/core_seq_lib.sv](verif/agents/core_agent/core_seq_lib.sv)), generate individual streams of OBI traffic:
 
 | Sequence | Intent |
 |---|---|
-| `core_base_seq` | Random ops over a configurable address region, with a `store_pct` weight |
-| `core_line_seq` | All traffic inside one line — the false-sharing primitive |
+| `core_base_seq` | Random operations over a configurable address region with a configurable `store_pct` |
+| `core_line_seq` | All traffic confined to one cache line, providing the primative for false sharing  |
 | `core_pingpong_seq` | All traffic to one word |
-| `core_set_conflict_seq` | More live tags than ways in a chosen set, forcing evictions and writebacks |
-| `core_store_streak_seq` | Repeated stores to one address — silent `E→M` then long runs of `M` hits with no bus traffic at all |
-| `core_read_only_seq` | Loads only, so lines settle into `S`/`E` |
-| `core_single_seq` | One explicit access, for directed litmus sequences |
+| `core_set_conflict_seq` | Generates more live tags than available ways in a selected set, forcing evictions and writebacks |
+| `core_store_streak_seq` | Repeated stores to one address, exercising silent `E→M` transitions and long `M` hit sequences without bus traffic |
+| `core_read_only_seq` | Load only traffic that drives lines towards stable  `S` and `E` states |
+| `core_single_seq` | Issues one explicit access for use by directed virtual sequences |
 
-### Virtual sequences ([verif/env/seq_lib/cache_vseq_lib.sv](verif/env/seq_lib/cache_vseq_lib.sv))
+### Virtual sequences START HERE SEP
 
-The base virtual sequence forks one core-level sequence per core; subclasses only
-override `run_core_seq()`.
+Virtual sequences, implemented in ([verif/env/seq_lib/cache_vseq_lib.sv](verif/env/seq_lib/cache_vseq_lib.sv)), coordinate traffic across both cores. 
+
+The base virtual sequence launches one core-level sequence per core. Individual subclasses specialize the traffic pattern by overriding `run_core_seq()`.
 
 | Virtual sequence | Coherence behaviour it targets |
 |---|---|
