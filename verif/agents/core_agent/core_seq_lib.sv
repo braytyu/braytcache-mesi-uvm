@@ -100,7 +100,6 @@ class core_pingpong_seq extends core_base_seq;
       `uvm_error(get_type_name(), "core_item randomize failed")
     finish_item(it);
   endtask
-
 endclass
 
 
@@ -139,7 +138,6 @@ class core_set_conflict_seq extends core_base_seq;
 
 endclass
 
-
 // Repeated stores to one address: exercises the silent E->M upgrade and long
 // runs of M hits that generate no bus traffic at all.
 class core_store_streak_seq extends core_base_seq;
@@ -167,7 +165,6 @@ class core_store_streak_seq extends core_base_seq;
 
 endclass
 
-
 // Loads only, so lines settle into S/E and stay there.
 class core_read_only_seq extends core_base_seq;
   constraint c_no_stores { store_pct == 0; }
@@ -176,7 +173,6 @@ class core_read_only_seq extends core_base_seq;
     super.new(name);
   endfunction
 endclass
-
 
 // Single explicit access, for directed litmus sequences.
 class core_single_seq extends uvm_sequence #(core_item);

@@ -8,10 +8,9 @@
 // completes before the next grant, so caches never enter transient states.
 //
 // Per-master fields are unpacked arrays so each cache drives only its own
-// element -- avoids multiple drivers on a shared packed vector. For the same
+// element, avoids multiple drivers on a shared packed vector. For the same
 // reason this interface carries no modports; monitors read signals directly
-// after the clock edge, which is race-free because the RTL uses non-blocking
-// assignments.
+// after the clock edge.
 interface bus_if (input logic clk, input logic rst_n);
   import cache_pkg::*;
 

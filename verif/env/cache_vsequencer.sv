@@ -1,9 +1,7 @@
 `ifndef CACHE_VSEQUENCER_SV
 `define CACHE_VSEQUENCER_SV
 
-// Holds a handle to every core sequencer so a virtual sequence can coordinate
-// traffic across both caches -- which is the only way to create a coherence
-// event at all.
+// Holds a handle to every core sequencer so a virtual sequence can coordinate traffic across both caches.
 class cache_vsequencer extends uvm_sequencer;
 
   core_sequencer core_sqr [NUM_CORES];

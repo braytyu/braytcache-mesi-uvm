@@ -110,8 +110,8 @@ class cache_coverage extends uvm_component;
     }
   endgroup
 
-  // Two-cache state pair for one line. The point of this cross is its illegal
-  // bins: they enumerate every combination MESI forbids.
+  // Two-cache state pair for one line. This crosses has illegal
+  // bins that enumerate every combination MESI forbids.
   covergroup cg_share with function sample (mesi_e s0, mesi_e s1);
     option.per_instance = 1;
     option.name         = "cg_share";

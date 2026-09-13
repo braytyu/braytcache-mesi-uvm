@@ -2,7 +2,7 @@
 `define CACHE_VSEQ_LIB_SV
 
 // Base virtual sequence: forks one core-level sequence per core and waits for
-// all of them. Subclasses only override run_core_seq().
+// all of them. Subclasses override run_core_seq().
 class cache_base_vseq extends uvm_sequence;
 
   rand int unsigned num_txns;
@@ -31,7 +31,7 @@ class cache_base_vseq extends uvm_sequence;
         join_none
       end
       wait fork;
-    end join
+    end join 
   endtask
 
   // The single extension point: subclasses swap in a different core sequence
@@ -47,10 +47,7 @@ class cache_base_vseq extends uvm_sequence;
     s.start(p_sequencer.core_sqr[c]);
   endtask
 
-  // One blocking access on one core. start() does not return until the driver
-  // has seen rvalid, so calling this sequentially gives a strict, deterministic
-  // interleaving between the two cores -- which is what the directed sequences
-  // below rely on.
+  // One blocking access on one core. start() does not return until the driver has seen rvalid.
   protected task do_access(int unsigned core, core_op_e a_op, addr_t a_addr, data_t a_data);
     core_single_seq s;
     s = core_single_seq::type_id::create("directed");
@@ -74,7 +71,6 @@ class random_vseq extends cache_base_vseq;
 endclass
 
 
-// Both cores confined to a handful of lines: maximum coherence pressure.
 class shared_region_vseq extends cache_base_vseq;
   `uvm_object_utils(shared_region_vseq)
   function new(string name = "shared_region_vseq");
@@ -85,7 +81,7 @@ class shared_region_vseq extends cache_base_vseq;
 endclass
 
 
-// Same line, mostly different words: invalidations with no real data sharing.
+// Same line w/different words: invalidations with no real data sharing.
 class false_sharing_vseq extends cache_base_vseq;
 
   rand addr_t shared_line;
@@ -331,7 +327,7 @@ class producer_consumer_vseq extends cache_base_vseq;
 
       // The producer runs concurrently, when this load completes the
       // payload may be newer than the flag we observed. The
-      // ordering property is that it can never be older.
+      // ordering property is that it can never be older. 
       if (s.observed_rdata[31:16] !== 16'hc0de ||
           s.observed_rdata[15:0]   <  seen_flag[15:0])
         `uvm_error(get_type_name(),
@@ -347,10 +343,7 @@ endclass
 // order, on a cache that starts empty. Each access is issued and completed
 // before the next begins, so the resulting transition sequence is deterministic
 // rather than a property of the seed.
-//
-// This exists so cg_mesi closes by construction instead of by luck, and so that
-// a transition failure names the exact transition rather than "somewhere in 80
-// random accesses".
+
 class mesi_walk_vseq extends cache_base_vseq;
 
   `uvm_object_utils(mesi_walk_vseq)
@@ -398,18 +391,15 @@ class mesi_walk_vseq extends cache_base_vseq;
 
 endclass
 
-
-// Directed attack on the one race an atomic bus does not remove.
-//
 // Both caches are driven into S on the same line, then both issue a store at
 // the same time. One wins arbitration and completes a CleanUnique, invalidating
 // the other. The loser is already parked in ST_BUS with a CleanUnique pending
 // that is now wrong, and must re-derive it as a ReadUnique at grant.
 //
-// This cannot be forced with absolute certainty from the core interfaces -- it
-// depends on both caches being in ST_BUS together -- but a bus transaction is
+// This cannot be forced with absolute certainty from the core interfaces (it
+// depends on both caches being in ST_BUS together) but a bus transaction is
 // tens of cycles long and the stores are issued with zero delay, so the overlap
-// is reliable. Repeating over several lines makes it near-certain.
+// is reliable.
 class upgrade_race_vseq extends cache_base_vseq;
 
   rand int unsigned n_rounds;

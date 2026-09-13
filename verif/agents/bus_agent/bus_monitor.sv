@@ -2,8 +2,7 @@
 `define BUS_MONITOR_SV
 
 // Passive observer of the coherent bus. Signals are read immediately after the
-// clock edge, which yields pre-edge values because the RTL drives them from
-// non-blocking assignments.
+// clock edge, which yields pre-edge values.
 class bus_monitor extends uvm_monitor;
 
   virtual bus_if vif;

@@ -120,8 +120,8 @@ module coherence_bus (
   // A cache line is moved as LINE_WORDS single-beat transactions, indexed by
   // beat_q. Valids are gated on the state so they drop automatically on exit.
   // DECISION: AXI4-Lite has no bursts, so a fill is several transactions rather
-  // than one. Accepted in exchange for a genuinely standard memory interface.
-
+  // than one. 
+  
   assign mem.awvalid = (bst_q == B_MEM_WR) && !aw_done_q;
   assign mem.wvalid  = (bst_q == B_MEM_WR) && !w_done_q;
   assign mem.bready  = (bst_q == B_MEM_WR);

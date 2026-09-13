@@ -93,8 +93,7 @@ module l1_cache #(
   // What this cache needs from the bus, derived from live state every cycle.
   // DECISION: the operation is not latched when the request is raised. If a
   // snoop invalidates us while we queue, a pending CleanUnique silently becomes
-  // a ReadUnique and a pending WriteBack withdraws. That is the one race an
-  // atomic bus does not remove, and this is where it is handled.
+  // a ReadUnique and a pending WriteBack withdraws. 
 
   logic    bus_req_c;
   bus_op_e bus_op_c;
@@ -286,7 +285,7 @@ module l1_cache #(
         end
 
         // Resolve the access. Loads and stores that already hold write
-        // permission complete here with no bus traffic at all -- including the
+        // permission complete here with no bus traffic at all, including the
         // silent E->M upgrade.
         // DECISION: vic_q is latched on every path, set to hit_way on the
         // upgrade path. That way the fill target is always vic_q even when an
@@ -316,7 +315,7 @@ module l1_cache #(
         end
 
         // Drain a dirty victim before reusing its way. Skipped entirely if the
-        // victim is clean -- a silent eviction, which MESI permits.
+        // victim is clean (a silent eviction), which MESI permits.
         ST_WB: begin
           if (!wb_needed) begin
             fsm_q <= ST_BUS;

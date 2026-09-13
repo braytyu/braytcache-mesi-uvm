@@ -3,8 +3,8 @@
 
 class axil_monitor extends uvm_monitor;
 
-  // Passive reconstruction of AXI4-Lite transactions. Feeds coverage only --
-  // the scoreboard reads the memory model directly at end of test.
+  // Passive reconstruction of AXI4-Lite transactions. Feeds coverage only.
+  // The scoreboard reads the memory model directly at end of test.
   virtual axil_if vif;
   axil_agent_cfg  cfg;
 

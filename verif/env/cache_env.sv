@@ -18,9 +18,7 @@ class cache_env extends uvm_env;
     super.new(name, parent);
   endfunction
 
-  // Per-core agents and probes are built from the geometry, so a different
-  // NUM_CORES needs no edit here. Scoreboard and coverage are independently
-  // disableable through the env config.
+  // Per-core agents and probes are built from the geometry.
   function void build_phase(uvm_phase phase);
     string agt_name;
     super.build_phase(phase);
@@ -47,7 +45,7 @@ class cache_env extends uvm_env;
 
   // Every observation stream fans out to both the scoreboard and coverage. The
   // probe virtual interfaces are handed over directly as well, because the SWMR
-  // sweep needs a whole-cache snapshot rather than a transaction stream.
+  // sweep needs a whole-cache snapshot.
   function void connect_phase(uvm_phase phase);
     super.connect_phase(phase);
 

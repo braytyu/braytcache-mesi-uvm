@@ -3,8 +3,7 @@
 
 `timescale 1ns/1ps
 
-// Bound into every l1_cache instance. Checks the core-side handshake and the
-// atomic-bus assumptions the MESI implementation relies on.
+// Bound into every l1_cache instance. Checks the core-side handshake and the atomic-bus assumptions.
 module cache_sva import cache_pkg::*; (
   input logic    clk,
   input logic    rst_n,
@@ -79,8 +78,7 @@ module cache_sva import cache_pkg::*; (
     bus_rsp_valid |-> bus_gnt);
 
   // The cache re-derives its bus op combinationally every cycle. Once granted
-  // that choice must be frozen, which is only sound because a granted cache is
-  // never snooped.
+  // that choice must be frozen, because a granted cache is never snooped.
   a_op_frozen_while_granted: assert property (
     bus_gnt ##1 bus_gnt |-> $stable(bus_op));
 

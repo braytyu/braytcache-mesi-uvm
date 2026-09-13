@@ -1,411 +1,355 @@
 # Setup and reproduction
 
-Every command, option and setting used to produce the results in
-[../README.md](../README.md). Follow it top to bottom on a clean machine and you
-get the same twelve passes, the same five bug detections and the same coverage
-numbers.
+This guide documents the tool configuration and commands used for the recorded braytcache runs. Follow it to rebuild the project, run the twelve tests, exercise the five injected bugs, and test the alternate cache geometry.
 
-**Contents:** [Step 0 — tool capability](#step-0--what-the-free-questa-tier-can-and-cannot-do)
-· [What you need](#what-you-need)
-· [Step 1 — Questa](#step-1--questa-compile-and-elaborate)
-· [Step 2 — bundle](#step-2--bundle-for-eda-playground)
-· [Step 3 — Playground setup](#step-3--eda-playground-account-and-settings)
-· [Step 4 — every test](#step-4--every-test-with-its-exact-options)
-· [Step 5 — bug injection](#step-5--bug-injection)
-· [Step 6 — second geometry](#step-6--the-second-geometry)
-· [Reading a result](#reading-a-result)
-· [Things that cost time](#things-that-cost-time)
+The commands reproduce the **flow and configurations** used by the project. Exact randomized traffic, timing, counters, and coverage percentages may differ unless the simulator version and random seed also match the recorded run.
 
-## The two machines
+## Contents
 
-Two machines, and it matters which is which:
+- [Tested flow](#tested-flow)
+- [Requirements](#requirements)
+- [1. Check the local Questa installation](#1-check-the-local-questa-installation)
+- [2. Compile and elaborate locally](#2-compile-and-elaborate-locally)
+- [3. Generate the EDA Playground files](#3-generate-the-eda-playground-files)
+- [4. Configure EDA Playground](#4-configure-eda-playground)
+- [5. Run the functional tests](#5-run-the-functional-tests)
+- [6. Run the injected bugs](#6-run-the-injected-bugs)
+- [7. Run the alternate geometry](#7-run-the-alternate-geometry)
+- [Reading a result](#reading-a-result)
+- [Troubleshooting](#troubleshooting)
+- [Using a fully licensed simulator](#using-a-fully-licensed-simulator)
+- [Optional two-machine workflow](#optional-two-machine-workflow)
 
-| Machine | Role | Runs |
+## Tested flow
+
+The recorded project flow uses two simulators because of the limits of the available local license:
+
+| Tool | Version or configuration | Role |
 |---|---|---|
-| **Authoring machine** | where the code is written and edited | nothing — no compile, no simulation |
-| **Run machine** | where Questa is installed | everything in this document |
+| Questa–Intel FPGA Starter Edition | 2025.2 | Local SystemVerilog compilation and elaboration |
+| Synopsys VCS on EDA Playground | UVM 1.2 | Simulation, assertions, functional coverage, and bug injection |
 
-Transfer is a manual copy of the `braytcache/` directory, authoring to run, one
-direction only. There is no staleness detection — see
-[DEBUG_LOG O-003](DEBUG_LOG.md).
+Questa Starter successfully runs `vlog` and `vopt` on the complete source tree. On the machine used for this project, `vsim` could not check out the `svverification` feature required to load a testbench containing constrained randomization and covergroups. VCS on EDA Playground was used for every recorded simulation.
 
-Two paths appear throughout. Substitute your own:
+This is the tested flow, not a general compatibility statement about every simulator or license tier.
 
-| Placeholder | Meaning |
-|---|---|
-| `<REPO>` | wherever `braytcache/` lives on the run machine |
-| `<QUESTA>` | the Questa install root, e.g. `C:/altera/<version>/questa_fse` |
+## Requirements
 
-**If either path contains a space, it has to be quoted** — `{...}` in Questa's
-Tcl transcript, `"..."` in bash. This is the single most common cause of a "file
-not found" that looks like a missing file.
+| Requirement | Purpose | Notes |
+|---|---|---|
+| Questa–Intel FPGA Starter Edition 2025.2 | Local compile and elaboration | Set up the Intel/Altera license before launching Questa |
+| Python 3.8 or newer | Generate the Playground bundles | The bundler uses only the Python standard library |
+| EDA Playground account | Run VCS | Commercial simulators are available only while signed in |
+| Web browser | Access EDA Playground | No local VCS installation is required for this flow |
 
-Three places take commands, and they are not interchangeable:
+The commands below use `<REPO>` for the directory containing the cloned project. If a path contains spaces, wrap it in braces in the Questa Tcl transcript and in quotes in a shell.
 
-| Where | What goes there |
-|---|---|
-| **Questa Transcript** pane | `vlib`, `vlog`, `vopt` — Tcl, not shell |
-| **bash** on the authoring machine | `python sim/bundle_playground.py` only |
-| **edaplayground.com** in a browser | every simulation |
+## 1. Check the local Questa installation
 
-Git Bash is fine for the one Python command. Note that Git Bash ships **no GNU
-Make**, so nothing in `sim/Makefile` runs there — see the last section.
+The repository includes two small capability checks under [`sim/`](../sim/):
 
-## Step 0 — what the free Questa tier can and cannot do
+- [`tool_check.sv`](../sim/tool_check.sv) exercises SystemVerilog classes, constraints, covergroups, illegal cross bins, and concurrent assertions.
+- [`tool_check_uvm.sv`](../sim/tool_check_uvm.sv) confirms that the bundled UVM library can be compiled and linked.
 
-**This was the first question and it decided the whole flow. The answer is
-already known — recorded here so nobody has to rediscover it.**
-
-Questa–Intel/Altera FPGA **Starter** Edition 2025.2:
-
-| Capability | Result |
-|---|---|
-| `vlog` — compile class-based SystemVerilog, covergroups, SVA | **works** |
-| `vopt` — elaborate the full UVM testbench | **works** |
-| `vsim` — *load and run* a design containing `randomize`/`covergroup` | **blocked**, no `svverification` licence |
-
-So Questa is a compile-and-elaborate tool for this project and nothing more. All
-simulation happens on EDA Playground under VCS. That is a licence boundary, not
-a defect in the project.
-
-Two standalone probes live in `sim/` because they establish this in about a
-minute on a new machine, and they depend on nothing else in the repo:
+From the Questa transcript:
 
 ```tcl
-vlog -sv tool_check.sv
+cd {<REPO>/sim}
+vlib work
+vlog -sv -timescale 1ns/1ps tool_check.sv
 vsim -c tool_check -do "run -all; quit -f"
 ```
 
-`tool_check.sv` reports per stage — classes and constraints, then covergroups
-with `illegal_bins` in a cross, then concurrent assertions — so a failure names
-the exact missing capability instead of burying it in cascading errors.
-`tool_check_uvm.sv` separately confirms the UVM library is present and linked.
+On the Starter license used for this project, compilation succeeds and simulation stops with a license error for `svverification`. That result confirms that Questa can still be used for the next step even though the UVM simulations must run elsewhere.
 
-On the Starter tier the `vlog` line passes and the `vsim` line fails with a
-licence error. **That is the expected result**, and it is what sent this project
-to EDA Playground.
-
-### Simulators that will not work at all
-
-| Tool | Why not |
-|---|---|
-| Verilator | No UVM, no classes, no constrained randomisation, no covergroups |
-| Icarus Verilog | SystemVerilog class support far too incomplete |
-| GHDL / Yosys | Wrong language / synthesis only |
-| Vivado XSim | Runs UVM, but covergroup support is partial — `illegal_bins` in crosses is the core of this project and is unreliable there |
-| **ModelSim** Intel FPGA Starter | Not the same product as Questa; excludes the class/UVM subset. If the installer offers both, you want **Questa**. |
-
-## What you need
-
-| Tool | Needed for | Notes |
-|---|---|---|
-| Questa FPGA Edition 2025.2 | Steps 0 and 1 | Free Starter licence from Intel's Self-Service Licensing Center. Set `LM_LICENSE_FILE` before launching. |
-| Python 3.8+ | `bundle_playground.py` | Standard library only, no packages to install. |
-| A browser + EDA Playground account | every simulation | Free. Must be logged in. |
-| UVM 1.2 library | the testbench | Playground supplies it. Questa's bundled 1.1d is enough to elaborate against. |
-| GNU Make | nothing, currently | Only for the untested `sim/Makefile` targets. Not in Git Bash. |
-
-All paths in `braytcache.f` are relative, so **run `make` from inside `sim/`**.
-
-## Step 1 — Questa: compile and elaborate
-
-This catches syntax and structural errors across all 37 compiled files without
-simulating anything. It is the fast filter; do it before every Playground paste.
-
-Type these into Questa's **Transcript** pane. They are Questa commands, not
-shell commands.
+To check the bundled UVM library separately:
 
 ```tcl
-cd {<REPO>/braytcache/sim}
+vlog -sv -timescale 1ns/1ps tool_check_uvm.sv
+vsim -c tool_check_uvm -L mtiUvm -do "run -all; quit -f"
+```
+
+If your license can load and run both checks, you may be able to use the local flow described in [Using a fully licensed simulator](#using-a-fully-licensed-simulator).
+
+## 2. Compile and elaborate locally
+
+Run these commands from the Questa transcript:
+
+```tcl
+cd {<REPO>/sim}
 vlib work
 vlog -sv -mfcu +acc=rn -timescale 1ns/1ps -f braytcache.f
 vopt +acc=rn -L mtiUvm tb_top -o tb_opt
 ```
 
-**The braces matter** if any directory in the path has a space in it — Tcl needs
-`{...}` around the whole path. In a bash shell use `"..."` instead.
+Expected result:
 
-Expected: `vlog` reports **0 errors, 0 warnings**; `vopt` reports **0 errors**
-and prints `-- Loading module cache_sva`, which confirms the SVA bind attached.
+- `vlog`: 0 errors and 0 warnings
+- `vopt`: 0 errors
+- The elaboration log includes `Loading module cache_sva`, confirming that the per-cache assertion bind was elaborated
 
-Flags that are not optional:
+Important options:
 
-| Flag | Why |
+| Option | Reason |
 |---|---|
-| `-sv` | SystemVerilog, not Verilog-2001 |
-| `-mfcu` | single compilation unit — without it the `bind` in `tb_top` cannot see `l1_cache` |
-| `+acc=rn` | keeps nets and registers visible for the whitebox probe and for waveforms |
-| `-L mtiUvm` | Questa's bundled UVM 1.1d library |
+| `-sv` | Enables SystemVerilog |
+| `-mfcu` | Compiles the source as one compilation unit |
+| `+acc=rn` | Preserves register and net visibility for the white-box probes and waveform debug |
+| `-timescale 1ns/1ps` | Applies the project simulation timescale |
+| `-f braytcache.f` | Uses the checked-in compilation order |
+| `-L mtiUvm` | Links Questa's bundled UVM library during elaboration |
 
-Do **not** use Questa's *New Project* wizard. There is no project file. You
-`cd` into `sim/` and issue the four commands above.
+Run the commands from `sim/` because paths in [`braytcache.f`](../sim/braytcache.f) are relative to that directory. A Questa project file is not required.
 
-## Step 2 — bundle for EDA Playground
+## 3. Generate the EDA Playground files
 
-Playground cannot resolve `+incdir`, so the tree is flattened into the two panes
-it expects, with all 21 `` `include `` directives expanded inline.
+EDA Playground provides one Design pane and one Testbench pane. The repository bundler flattens the source tree into those two files.
 
-On the authoring machine:
+From the repository root:
 
 ```bash
 python sim/bundle_playground.py
 ```
 
-Writes:
+The script writes:
 
-| File | Contents | Paste into |
+| Generated file | Contents | Playground pane |
 |---|---|---|
-| `playground/design.sv` | RTL + SVA. No UVM dependency, compiles first. | **Design** pane |
-| `playground/testbench.sv` | UVM package + `tb_top` | **Testbench** pane |
+| `playground/design.sv` | Eight RTL files and three SVA modules | **Design** |
+| `playground/testbench.sv` | UVM package, its included classes, and `tb_top` | **Testbench** |
 
-**Which pane to re-paste** after an edit — the bundler rewrites both every time,
-but usually only one has changed:
+The UVM package contains 24 project-local `` `include `` directives. The bundler expands those files inline and leaves the two `uvm_macros.svh` includes for the simulator-provided UVM installation.
 
-| You edited | Re-paste |
+Do not edit the generated files. Make changes under `rtl/` or `verif/`, then rerun the bundler.
+
+| Changed source | Pane to replace |
 |---|---|
-| `rtl/`, `verif/sva/` | Design |
-| `verif/agents/`, `verif/env/`, `verif/tests/`, `verif/tb/` | Testbench |
+| `rtl/` or `verif/sva/` | **Design** |
+| `verif/agents/`, `verif/env/`, `verif/tests/`, or `verif/tb/` | **Testbench** |
 
-## Step 3 — EDA Playground account and settings
+The script rewrites both generated files each time, but only the affected pane normally changes.
 
-1. Go to <https://edaplayground.com> and **create an account**. Verify the email.
-2. **Log in.** Anonymous sessions cannot use the commercial simulators — this is
-   not optional, and the failure mode is that VCS simply is not in the dropdown.
-3. Set the left-hand panel exactly as follows:
+### When adding or removing a source file
 
-| Setting | Value |
-|---|---|
-| Testbench + Design | `SystemVerilog/Verilog` |
-| UVM / OVM | **`UVM 1.2`** |
-| Tools & Simulators | **`Synopsys VCS`** |
-| Compile Options | *(empty, unless injecting a bug or changing geometry)* |
-| Run Options | `+UVM_TESTNAME=<test>` *(see the table in Step 4)* |
+The project currently maintains the source order in two places:
 
-4. Leave every checkbox off. Two matter later: *Open EPWave after run* together
-   with `+dump` in Run Options for waveforms, and *Use run.bash* to loop several
-   `+UVM_TESTNAME` values in one session.
-5. Paste `design.sv` into the **Design** pane, `testbench.sv` into **Testbench**.
-6. **Run**.
+1. [`sim/braytcache.f`](../sim/braytcache.f), used by the local simulator flow
+2. The `DESIGN` and `TESTBENCH` lists in [`sim/bundle_playground.py`](../sim/bundle_playground.py)
 
-### What Playground actually does with those two panes
+These lists are not compared automatically. Update both when the source tree changes, then compile locally and regenerate both Playground panes. This limitation is recorded in [`DEBUG_LOG.md`](DEBUG_LOG.md#o-012--the-bundler-duplicates-the-file-list).
 
-A single VCS invocation. Worth knowing, because every error message is reported
-against `design.sv` or `testbench.sv` line numbers rather than the original
-files:
+## 4. Configure EDA Playground
 
-```bash
-vcs -full64 -sverilog -timescale=1ns/1ns +incdir+$UVM_HOME/src \
-    $UVM_HOME/src/uvm.sv $UVM_HOME/src/dpi/uvm_dpi.cc \
-    design.sv testbench.sv  &&  ./simv +UVM_TESTNAME=<test>
-```
+1. Open [EDA Playground](https://edaplayground.com) and sign in. VCS is not available to anonymous sessions.
+2. Configure the left panel:
 
-So UVM is compiled from source on every run (about 15 s), the two panes are just
-two files in order, and — critically — **Compile Options are `vcs` switches while
-Run Options are `simv` plusargs.** That is why `+define+` goes in one box and
-`+UVM_TESTNAME` in the other.
+   | Setting | Value |
+   |---|---|
+   | Testbench + Design | `SystemVerilog/Verilog` |
+   | UVM / OVM | `UVM 1.2` |
+   | Tools & Simulators | `Synopsys VCS` |
+   | Compile Options | Leave empty for the default build |
+   | Run Options | `+UVM_TESTNAME=smoke_test +num_txns=5` |
 
-## Step 4 — every test, with its exact options
+3. Paste `playground/design.sv` into **Design**.
+4. Paste `playground/testbench.sv` into **Testbench**.
+5. Leave the optional checkboxes disabled for the initial run.
+6. Select **Run**.
 
-Compile Options is **empty** for all twelve. Only Run Options change.
+EDA Playground compiles the two panes as generated files. Compiler messages therefore refer to `design.sv` or `testbench.sv` line numbers, not the original source paths. Search for the surrounding code in the repository to map a bundled line back to its source file.
+
+### Compile Options versus Run Options
+
+| Field | Passed to | Use it for | Example |
+|---|---|---|---|
+| Compile Options | `vcs` | Preprocessor definitions and compiler switches | `+define+BUG_2` |
+| Run Options | `simv` | Test selection and runtime plusargs | `+UVM_TESTNAME=eviction_test +num_txns=30` |
+
+Geometry and bug-injection defines belong in **Compile Options**. `+UVM_TESTNAME`, `+num_txns`, verbosity, and waveform controls belong in **Run Options**.
+
+## 5. Run the functional tests
+
+Use an empty **Compile Options** field for the default 2-core, 2-way, 16-set, 16-byte-line configuration.
 
 | Test | Run Options |
 |---|---|
 | `smoke_test` | `+UVM_TESTNAME=smoke_test +num_txns=5` |
-| `mesi_walk_test` | `+UVM_TESTNAME=mesi_walk_test` |
+| `random_test` | `+UVM_TESTNAME=random_test` |
+| `shared_region_test` | `+UVM_TESTNAME=shared_region_test +num_txns=30` |
+| `false_sharing_test` | `+UVM_TESTNAME=false_sharing_test +num_txns=30` |
 | `pingpong_test` | `+UVM_TESTNAME=pingpong_test +num_txns=30` |
 | `eviction_test` | `+UVM_TESTNAME=eviction_test +num_txns=30` |
-| `upgrade_race_test` | `+UVM_TESTNAME=upgrade_race_test` |
-| `producer_consumer_test` | `+UVM_TESTNAME=producer_consumer_test` |
-| `false_sharing_test` | `+UVM_TESTNAME=false_sharing_test +num_txns=30` |
-| `store_streak_test` | `+UVM_TESTNAME=store_streak_test` |
 | `read_mostly_test` | `+UVM_TESTNAME=read_mostly_test +num_txns=30` |
-| `shared_region_test` | `+UVM_TESTNAME=shared_region_test +num_txns=30` |
-| `random_test` | `+UVM_TESTNAME=random_test` |
+| `store_streak_test` | `+UVM_TESTNAME=store_streak_test` |
+| `producer_consumer_test` | `+UVM_TESTNAME=producer_consumer_test` |
+| `mesi_walk_test` | `+UVM_TESTNAME=mesi_walk_test` |
+| `upgrade_race_test` | `+UVM_TESTNAME=upgrade_race_test` |
 | `regression_test` | `+UVM_TESTNAME=regression_test` |
 
-`+num_txns` is **per core** — `+num_txns=30` on a two-core build issues sixty
-accesses. It only has an effect on the seven tests above that carry it; the other
-five size themselves differently and ignore it entirely. `mesi_walk`,
-`upgrade_race` and `producer_consumer` override `body()` and are sized by rounds
-or messages; `store_streak` is sized by `n_streaks`; `regression` re-randomises a
-length per phase.
+The order above matches the test class order in [`cache_tests.sv`](../verif/tests/cache_tests.sv).
 
-Optional additions to Run Options:
+### Transaction-count override
 
-| Plusarg | Effect |
+`+num_txns=<n>` sets the number of accesses **per core** for these seven tests:
+
+- `smoke_test`
+- `random_test`
+- `shared_region_test`
+- `false_sharing_test`
+- `pingpong_test`
+- `eviction_test`
+- `read_mostly_test`
+
+For example, `+num_txns=30` produces 60 accesses in a two-core build.
+
+The remaining tests determine their own length:
+
+- `store_streak_test`: two to four streaks per core
+- `producer_consumer_test`: four to twelve messages
+- `mesi_walk_test`: ten directed accesses
+- `upgrade_race_test`: four to eight rounds
+- `regression_test`: three to six phases, with 15 to 35 transactions randomized per phase
+
+### Debug options
+
+| Run option | Effect |
 |---|---|
-| `+UVM_VERBOSITY=UVM_HIGH` | full transaction-level tracing; very noisy |
-| `+dump` | writes `dump.vcd`; tick *Open EPWave after run* |
+| `+UVM_VERBOSITY=UVM_HIGH` | Enables detailed transaction logging |
+| `+dump` | Writes `dump.vcd` |
 
-## Step 5 — bug injection
+When using `+dump`, also enable **Open EPWave after run**.
 
-Five deliberate RTL mutations. **Every one of these runs must fail.** A clean run
-means the checkers are blind to that bug.
+## 6. Run the injected bugs
 
-Put the define in **Compile Options**, keep Run Options as normal:
+Each bug is enabled separately through **Compile Options**. Use the same `eviction_test` run for the recorded comparison:
 
-| Compile Options | Run Options | Expected result |
+| Compile Options | Run Options | Recorded failure |
 |---|---|---|
-| `+define+BUG_1` | `+UVM_TESTNAME=eviction_test +num_txns=30` | `cg_mesi` illegal bin `m_to_e` at ~1.5 us, **exit 1** |
-| `+define+BUG_2` | `+UVM_TESTNAME=eviction_test +num_txns=30` | `cg_share` illegal bin `ms` at ~7.7 us, **exit 1** |
-| `+define+BUG_3` | `+UVM_TESTNAME=eviction_test +num_txns=30` | 11 scoreboard `UVM_ERROR`s, runs to completion, **exit 0** |
-| `+define+BUG_4` | `+UVM_TESTNAME=eviction_test +num_txns=30` | `cg_mesi` illegal bin `dirty_dropped` at ~3.7 us, **exit 1** |
-| `+define+BUG_5` | `+UVM_TESTNAME=eviction_test +num_txns=30` | `cg_share` illegal bin `se` at ~1.8 us, **exit 1** |
+| `+define+BUG_1` | `+UVM_TESTNAME=eviction_test +num_txns=30` | `cg_mesi.m_to_e`, approximately 1.5 µs, exit 1 |
+| `+define+BUG_2` | `+UVM_TESTNAME=eviction_test +num_txns=30` | `cg_share.ms`, approximately 7.7 µs, exit 1 |
+| `+define+BUG_3` | `+UVM_TESTNAME=eviction_test +num_txns=30` | Eleven scoreboard errors, run completes, exit 0 |
+| `+define+BUG_4` | `+UVM_TESTNAME=eviction_test +num_txns=30` | `cg_mesi.dirty_dropped`, approximately 3.7 µs, exit 1 |
+| `+define+BUG_5` | `+UVM_TESTNAME=eviction_test +num_txns=30` | `cg_share.se`, approximately 1.8 µs, exit 1 |
 
-`BUG_3` exiting **0** is not a mistake — it is the point. It violates no protocol
-rule, so no illegal bin fires and nothing aborts; only the golden memory catches
-it. A regression script keyed on exit code alone would call that run a pass.
+The exact times depend on the seed. The required result is detection by the expected checker, not an identical timestamp.
 
-`eviction_test` is used for all five because it is the only test that produces
-writebacks, and `BUG_2` / `BUG_4` are undetectable without them. See
-[DEBUG_LOG O-007](DEBUG_LOG.md).
+`eviction_test` is used because the recorded workload reaches all five mutated paths. In particular:
 
-## Step 6 — the second geometry
+- `BUG_2` requires two shared copies followed by `CleanUnique`.
+- `BUG_4` requires capacity eviction of a line in `M`.
 
-| Compile Options | Run Options |
+`BUG_2` does **not** depend on writeback. A different test can detect it if that test produces the required shared-to-modified upgrade.
+
+Clear **Compile Options** before returning to a clean run. Playground retains the field between runs.
+
+## 7. Run the alternate geometry
+
+Use:
+
+| Field | Value |
 |---|---|
-| `+define+CFG_NUM_WAYS=4 +define+CFG_NUM_SETS=8` | `+UVM_TESTNAME=eviction_test +num_txns=30` |
+| Compile Options | `+define+CFG_NUM_WAYS=4 +define+CFG_NUM_SETS=8` |
+| Run Options | `+UVM_TESTNAME=eviction_test +num_txns=30` |
 
-Confirm it took effect from the first line of the log:
+Confirm the configuration near the beginning of the log:
 
-```
+```text
 [CFG] cores=2 sets=8 ways=4 line=16B
 ```
 
-**Clear the Compile Options box afterwards.** Playground keeps whatever is in
-that field between runs, and a stale geometry define is invisible in the Run
-Options — the `[CFG]` line is the only thing that will tell you.
+Available compile-time geometry controls are defined in [`rtl/cache_pkg.sv`](../rtl/cache_pkg.sv):
 
-Available geometry defines, all defaulted in `rtl/cache_pkg.sv`:
+| Define | Default | Current assumption |
+|---|---:|---|
+| `CFG_NUM_CORES` | 2 | `cg_share` is instantiated only for two cores |
+| `CFG_NUM_SETS` | 16 | Power of two |
+| `CFG_NUM_WAYS` | 2 | Power of two for tree-PLRU indexing |
+| `CFG_LINE_BYTES` | 16 | Power of two and at least two 32-bit words |
 
-| Define | Default | Constraint |
-|---|---|---|
-| `CFG_NUM_CORES` | 2 | `cg_share` assumes exactly 2 |
-| `CFG_NUM_SETS` | 16 | power of two |
-| `CFG_NUM_WAYS` | 2 | power of two (tree-PLRU indexing) |
-| `CFG_LINE_BYTES` | 16 | power of two, ≥ 4 |
+Clear the geometry defines after the run. Always check the `[CFG]` line before interpreting a result.
 
 ## Reading a result
 
-Three different mechanisms report failures, and they behave differently. Check
-all three — see [DEBUG_LOG O-005](DEBUG_LOG.md).
+A normal completed run prints:
 
-| Mechanism | Appears in UVM summary | Aborts run | Exit code |
+1. `[CFG]` — active geometry and randomized memory-delay range
+2. `[SB]` — load/store, coherence-operation, transition, and invariant-sweep counts
+3. `[COV]` — six covergroup results and the overall per-run coverage
+4. The UVM report summary
+
+The three failure mechanisms do not report in the same way:
+
+| Mechanism | Appears in UVM summary | Aborts immediately | Observed process exit |
 |---|---|---|---|
-| Scoreboard `uvm_error` | yes | no | 0 |
-| SVA assertion failure | **no** | no | 0 |
-| Covergroup illegal bin | **no** | **yes** | 1 |
+| Scoreboard `uvm_error` | Yes | No | 0 in the recorded flow |
+| SVA assertion failure | No | No | 0 in the recorded flow |
+| Covergroup illegal-bin hit | No | Yes | 1 in the recorded flow |
 
-A clean run prints, in order: the `[CFG]` line, `[SB]` traffic counters, the
-`[COV]` table, then `UVM_ERROR : 0`.
+Do not determine pass/fail from only the process exit code or only `UVM_ERROR : 0`. Check:
 
-**Read the `[SB]` counters even when everything passes.** They are a cheap
-summary of which protocol paths the stimulus actually reached, and they are the
-only way to notice a test is not doing what its name claims. That check caught a
-documentation error on a green run — [DEBUG_LOG O-010](DEBUG_LOG.md).
+- `UVM_ERROR` and `UVM_FATAL` totals
+- Simulator assertion-failure messages
+- Illegal-bin messages
+- Whether the run reached its expected end
+- `[SB]` counters, to confirm that the intended path was actually exercised
 
-## Things that cost time
+The differences are demonstrated in [`DEBUG_LOG.md`](DEBUG_LOG.md#o-005--failure-reporting-is-split-across-three-systems).
 
-| Symptom | Cause | Fix |
+## Troubleshooting
+
+| Symptom | Likely cause | Action |
 |---|---|---|
-| Results look wrong for no reason | **Compile Options still holds a define from the previous run.** Playground persists that field; Run Options gives no hint. | Read the `[CFG]` line at time 0 on every run. Clear the box. |
-| Synopsys VCS missing from the simulator dropdown | Not logged in | Log in. Anonymous sessions get open-source simulators only. |
-| An edit had no effect | Bundled but pasted into the wrong pane | `rtl/` and `verif/sva/` → Design; everything else → Testbench |
-| Playground errors point at line numbers that do not exist | Correct — they refer to the flattened `design.sv` / `testbench.sv` | Map back by searching the surrounding text in the original file |
-| Questa: "file not found" on a path that exists | A space somewhere in the path | Wrap in `{...}` in Tcl, `"..."` in bash |
-| `bind` produced no assertions, silently | `bind` at compilation-unit scope | Keep it inside `tb_top`. [D-001](DEBUG_LOG.md) |
-| Run ends immediately with `UVM_FATAL [RUNPHSTIME]` | Delay before `run_test()` | `#0`, not `#1`. [D-002](DEBUG_LOG.md) |
-| Compile succeeded but nothing changed | Forgot to re-bundle | `python sim/bundle_playground.py` after **every** `.sv` edit |
+| VCS is missing from the simulator list | The Playground session is not signed in | Sign in and reload the page |
+| A clean test unexpectedly behaves like a mutation or alternate geometry | Compile Options still contains an old define | Clear Compile Options and verify `[CFG]` |
+| A source edit has no effect | The bundles were not regenerated or the wrong pane was updated | Run the bundler again and replace the affected pane |
+| Error lines do not match the repository file | The message refers to a flattened bundle | Search the original tree for nearby code |
+| Questa reports a missing file that exists | A path contains spaces or the transcript is in the wrong directory | Use `{...}` around Tcl paths and run from `sim/` |
+| Assertions do not appear during elaboration | The `bind` was not elaborated | Confirm `cache_sva` appears in the `vopt` log |
+| `UVM_FATAL [RUNPHSTIME]` occurs at time zero | Simulation time elapsed before `run_test()` | Keep the existing `#0`; do not change it to `#1` |
+| Local compilation uses an old file name | A copied repository is stale | Replace the copied tree instead of merging directories |
 
-## What actually broke during bring-up
+## Using a fully licensed simulator
 
-These were the open structural risks before anything had been compiled. All four
-are resolved; the full reasoning for each is in [DEBUG_LOG.md](DEBUG_LOG.md).
-
-| Risk | Outcome |
-|---|---|
-| Interface array as a module port in `cache_top` | Compiled fine on both tools. No change needed. |
-| `bind` target scope for `cache_sva` | **Broke.** Questa rejected a compilation-unit-scope bind; moved inside `tb_top`. [D-001](DEBUG_LOG.md) |
-| `binsof ... intersect` in cross `illegal_bins` | Compiled and fired correctly on both tools. This is the core of the project and it works. |
-| `dut.g_cache[i].u_cache.state_q` hierarchical probe | Resolved correctly. `+acc=rn` is what keeps it visible. |
-
-Three further defects surfaced only under simulation: [D-002](DEBUG_LOG.md)
-(`#1` before `run_test()` fatals under UVM 1.2), [D-003](DEBUG_LOG.md)
-(`snoop_ack` asserted while unselected), [D-004](DEBUG_LOG.md) (`cg_alloc`
-sampled on the wrong predicate) and [D-005](DEBUG_LOG.md) (the litmus checker
-asserted a property the design never promised).
-
-## If you have a full simulator licence
-
-Everything above works around Questa Starter's `svverification` limit and
-Playground's CPU cap. With a full Questa, VCS or Xcelium licence the flow
-collapses to one command and unlocks the two things this project cannot
-currently do: **multi-seed regression** and **cross-run coverage merge**.
-
-`sim/Makefile` carries `questa`, `vcs`, `xcelium`, `regress` and `bugs` targets
-written for exactly that case.
-
-> **These targets have never been run.** They were written before the licence
-> boundary was known, and the flow moved to Playground before they could be
-> exercised. Treat them as a starting point, not as tested infrastructure. Git
-> Bash also does not ship GNU Make, so they need MSYS2, WSL or Linux.
+[`sim/Makefile`](../sim/Makefile) contains targets for Questa, VCS, and Xcelium:
 
 ```bash
 cd sim
-make questa  TEST=regression_test SEED=3
-make regress                       # all tests x seeds
-make bugs                          # all five injected bugs
-make questa  WAYS=4 SETS=8 TEST=eviction_test
+make questa TEST=regression_test SEED=3
+make vcs TEST=eviction_test SEED=3 PLUS=+num_txns=30
+make xcelium TEST=smoke_test SEED=1
+make regress SIM=questa SEEDS="1 2 3 4 5"
+make bugs SIM=questa
 ```
 
-All paths in `braytcache.f` are relative, so run `make` from inside `sim/`.
+The Makefile also accepts `WAYS`, `SETS`, `LINE`, `CORES`, `BUG`, `VERB`, and `PLUS`.
 
-## Run machine checklist
+These targets were not used to produce the checked-in results and have not been validated with a full simulator license. Treat them as a starting point. Review the pass/fail logic before using it in CI: the current `regress` target checks UVM totals but does not independently fail on every simulator assertion message.
 
-| # | Requirement | Check it with |
-|---|---|---|
-| 1 | Questa FPGA Starter Edition on `PATH` | `vsim -version` |
-| 2 | Intel licence file | `echo $LM_LICENSE_FILE` |
-| 3 | Python 3.8+ | `python --version` |
+GNU Make is not included with a default Git for Windows installation. Use an environment that provides it, such as MSYS2, WSL, or Linux.
 
-Questa is branded *Intel* in older Quartus releases and *Altera* in newer ones —
-same product. Add `.../questa_fse/win64` to `PATH`:
+## Optional two-machine workflow
 
-```bash
-export PATH="<QUESTA>/win64:$PATH"
-export LM_LICENSE_FILE="/path/to/license.dat"
+The original project was edited on one machine and run on another. That arrangement is not required; one machine can perform both roles if it has the necessary tools.
+
+If you do use separate machines:
+
+1. Treat the authoring copy as the source of truth.
+2. Replace the run-machine repository copy instead of merging an older directory into it.
+3. Run the local compile and elaboration step on the run machine.
+4. Generate the Playground bundles from the same source revision that was compiled.
+5. Bring only logs and failure details back to the authoring machine.
+
+Do not copy or commit generated simulator products:
+
+```text
+sim/work/
+sim/logs/
+sim/transcript
+*.wlf
+*.vcd
+modelsim.ini
+playground/design.sv
+playground/testbench.sv
 ```
 
-## VS Code and Questa are doing different jobs
-
-| Tool | Job |
-|---|---|
-| VS Code | Text editor. Writes `.sv` files. Compiles and simulates **nothing**. |
-| Questa | Compiler and elaborator. Reads those files and reports errors. Cannot simulate them on this licence tier. |
-| EDA Playground | Simulator. Runs the tests and prints the results. |
-
-VS Code and Questa point at the same directory on disk. There is no project file
-to create or import.
-
-## Transferring to the run machine
-
-Copy the whole `braytcache/` directory across by hand. Nothing in it is
-generated or machine-specific, so a plain copy is enough — no build step, no
-path fixups, no tooling required on the authoring side.
-
-**Copy in one direction only.** All editing happens on the authoring machine.
-If both copies get edited you will be reconciling them by hand in the middle of
-a debug session, which is the worst possible time. When a run fails, take the
-error text back to the authoring machine, fix it there, and re-copy.
-
-These are simulator build products, regenerated on every run — do not copy them
-back and do not commit them:
-
-```
-sim/work/   sim/logs/   sim/transcript   *.wlf   *.vcd   modelsim.ini
-playground/design.sv    playground/testbench.sv
-```
-
-`playground/` is generated by the bundler and is in `.gitignore`. The rest are
-Questa's; deleting `sim/work/` and re-running `vlib work` is the fix for any
-compile error that survives an edit.
+The repository `.gitignore` already excludes these paths.

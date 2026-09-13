@@ -17,7 +17,7 @@ class core_monitor extends uvm_monitor;
 
   // Address phase and response phase are separate events, so accepted requests
   // are queued and completed when rvalid arrives. The item is published only on
-  // completion -- the scoreboard orders transactions by when they retire.
+  // completion, and the scoreboard orders transactions by when they retire.
   task run_phase(uvm_phase phase);
     core_item pend[$];
     core_item it;

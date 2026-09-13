@@ -181,8 +181,7 @@ class coherence_scoreboard extends uvm_scoreboard;
 
   // ------------------------------------------------------ end of test check
   // Reconciles reference memory against the real system state: a line still
-  // held dirty lives in that cache, everything else must be in memory. This is
-  // the backstop for dirty data lost anywhere during the run.
+  // held dirty lives in that cache, everything else must be in memory. 
 
   function bit find_dirty_copy(addr_t a, output data_t val);
     addr_t la;
