@@ -1,8 +1,8 @@
-# braytcache — MESI-Coherent L1 Data Cache with UVM Verification
+# braytcache: MESI-Coherent L1 Data Cache with UVM Verification
 
 braytcache is a two-core, set-associative, write-back L1 data cache that maintains MESI coherence over a snooping interconnect. The RTL is verified with a constrained-random UVM environment that combines reference-model data checking, coherence-invariant checking, functional coverage, and SystemVerilog assertions.
 
-## Results at a glance
+## Project summary
 
 - **12 / 12** functional tests passed
 - **5 / 5** injected RTL bugs detected
@@ -41,11 +41,11 @@ braytcache is a two-core, set-associative, write-back L1 data cache that maintai
 
 ## Project motivation
 
-I built this project to develop the RTL design and verification skills I had gained during my most recent internship. A coherent two-core L1 data cache was a suitable challenge because it combines independent requesters, shared state, ownership transfer, data movement, replacement, and timing-dependent behavior within a manageable scope.
+I built this project to develop and exercise the RTL design and verification skills and concepts I learned throughout the course of my most recent internship. A coherent two-core L1 data cache was a suitable challenge because it combines independent requesters, shared state, ownership transfer, data movement, replacement, and timing-dependent behavior within a manageable scope.
 
-The verification environment focuses on constrained-random verification. Directed tests establish specific transitions and interleavings, while constrained-random workloads vary addresses, operation mixes, byte enables, conflicts, and memory latency. The environment compares completed transactions against a reference model, samples functional coverage, checks cache-state invariants, and applies protocol assertions throughout the run.
+The verification environment focuses on constrained-random verification, one of the most valuable methodologies I learned during my internship. My main takeaway was that effective random verification involves more than generating a large volume of traffic: the stimulus must be guided by targeted constraints, checked against independent models and invariants, and measured with functional coverage. Directed tests establish specific transitions and interleavings, while constrained-random workloads vary addresses, operation mixes, byte enables, conflicts, and memory latency. The environment compares completed transactions against a reference model, samples functional coverage, checks cache-state invariants, and applies protocol assertions throughout the run.
 
-The result is intended as a complete design-and-verification exercise rather than a performance-oriented cache. Its emphasis is on explaining the architectural choices, demonstrating that the intended behaviors were exercised, and showing how failures are detected and diagnosed.
+The result is intended as a complete design-and-verification showcase exercise rather than a performance-oriented cache. Its emphasis is on explaining the architectural choices, demonstrating that the intended behaviors were exercised, and showing how failures are detected and diagnosed.
 
 ---
 
