@@ -6,19 +6,24 @@ The commands reproduce the **flow and configurations** used by the project. Exac
 
 ## Contents
 
-- [Tested flow](#tested-flow)
-- [Requirements](#requirements)
-- [1. Check the local Questa installation](#1-check-the-local-questa-installation)
-- [2. Compile and elaborate locally](#2-compile-and-elaborate-locally)
-- [3. Generate the EDA Playground files](#3-generate-the-eda-playground-files)
-- [4. Configure EDA Playground](#4-configure-eda-playground)
-- [5. Run the functional tests](#5-run-the-functional-tests)
-- [6. Run the injected bugs](#6-run-the-injected-bugs)
-- [7. Run the alternate geometry](#7-run-the-alternate-geometry)
-- [Reading a result](#reading-a-result)
-- [Troubleshooting](#troubleshooting)
-- [Using a fully licensed simulator](#using-a-fully-licensed-simulator)
-- [Optional two-machine workflow](#optional-two-machine-workflow)
+- [Setup and reproduction](#setup-and-reproduction)
+  - [Contents](#contents)
+  - [Tested flow](#tested-flow)
+  - [Requirements](#requirements)
+  - [1. Check the local Questa installation](#1-check-the-local-questa-installation)
+  - [2. Compile and elaborate locally](#2-compile-and-elaborate-locally)
+  - [3. Generate the EDA Playground files](#3-generate-the-eda-playground-files)
+    - [When adding or removing a source file](#when-adding-or-removing-a-source-file)
+  - [4. Configure EDA Playground](#4-configure-eda-playground)
+    - [Compile Options versus Run Options](#compile-options-versus-run-options)
+  - [5. Run the functional tests](#5-run-the-functional-tests)
+    - [Transaction-count override](#transaction-count-override)
+    - [Debug options](#debug-options)
+  - [6. Run the injected bugs](#6-run-the-injected-bugs)
+  - [7. Run the alternate geometry](#7-run-the-alternate-geometry)
+  - [Reading a result](#reading-a-result)
+  - [Troubleshooting](#troubleshooting)
+  - [Using a fully licensed simulator](#using-a-fully-licensed-simulator)
 
 ## Tested flow
 
@@ -326,30 +331,3 @@ The Makefile also accepts `WAYS`, `SETS`, `LINE`, `CORES`, `BUG`, `VERB`, and `P
 These targets were not used to produce the checked-in results and have not been validated with a full simulator license. Treat them as a starting point. Review the pass/fail logic before using it in CI: the current `regress` target checks UVM totals but does not independently fail on every simulator assertion message.
 
 GNU Make is not included with a default Git for Windows installation. Use an environment that provides it, such as MSYS2, WSL, or Linux.
-
-## Optional two-machine workflow
-
-The original project was edited on one machine and run on another. That arrangement is not required; one machine can perform both roles if it has the necessary tools.
-
-If you do use separate machines:
-
-1. Treat the authoring copy as the source of truth.
-2. Replace the run-machine repository copy instead of merging an older directory into it.
-3. Run the local compile and elaboration step on the run machine.
-4. Generate the Playground bundles from the same source revision that was compiled.
-5. Bring only logs and failure details back to the authoring machine.
-
-Do not copy or commit generated simulator products:
-
-```text
-sim/work/
-sim/logs/
-sim/transcript
-*.wlf
-*.vcd
-modelsim.ini
-playground/design.sv
-playground/testbench.sv
-```
-
-The repository `.gitignore` already excludes these paths.
